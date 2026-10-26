@@ -1,0 +1,49 @@
+# Development configuration for an ordinary Linux desktop (no Raspberry Pi needed).
+# Run from the repository root:  cargo run -- --config config/dev.toml
+# All state goes to ./dev-data (git-ignored).
+
+listen = "127.0.0.1:8080"
+
+[auth]
+token = "dev-token-0123456789abcdef"
+
+[storage]
+upload-root = "dev-data/media"
+default-folder = "inbox"
+min-free-bytes = 0
+
+[mpv]
+ipc-socket = "dev-data/run/mpv.sock"
+settings-file = "dev-data/state/settings.json"
+args-env-file = "dev-data/state/mpv.env"
+executable = "mpv"
+
+[service-manager]
+# Stand-in for systemd: the service runs mpv itself, in a normal window,
+# and respawns it when it exits (like Restart=always).
+kind = "child-process"
+command = "mpv"
+fixed-args = ["--no-terminal", "--idle=yes"]
+
+[cec]
+# Fixed sample data; use kind = "linux" with device = "/dev/cecN" to test real
+# hardware (e.g. a USB CEC adapter, or the `vivid` kernel module's emulated one).
+kind = "stub"
+
+[system]
+# Logs instead of rebooting your workstation.
+power = "stub"
+
+[restore]
+after-crash = true
+# Point this at the state file of a locally running remoteplayer-mpvwatcher.
+watcher-state-file = "dev-data/watcher/state.json"
+
+# The built-in defaults target the Pi's DRM output; a desktop needs a window.
+[player-defaults]
+audio-device = "auto"
+gpu-context = ""
+hwdec = "auto-safe"
+drm-draw-plane = ""
+drm-drmprime-video-plane = ""
+fullscreen = false

@@ -1,0 +1,60 @@
+# remoteplayer-restservice configuration for the Raspberry Pi.
+# Installed as /etc/remoteplayer/restservice.toml (see README.md, "Installation").
+
+listen = "0.0.0.0:8080"
+
+[auth]
+# Every request except /api/v1/health needs "Authorization: Bearer <token>".
+# Generate a token with:  openssl rand -hex 24
+token = "CHANGE-ME"
+
+[storage]
+# Files live in first-level folders below this directory, never in the root itself.
+upload-root = "/srv/remoteplayer/media"
+# Folder used by POST /api/v1/uploads when no ?folder= is given.
+default-folder = "inbox"
+# Uploads are refused when they would leave less free space than this (256 MiB).
+min-free-bytes = 268435456
+# Optional hard limit per upload, in bytes.
+# max-upload-bytes = 21474836480
+
+[mpv]
+ipc-socket = "/run/remoteplayer-mpv/mpv.sock"
+settings-file = "/var/lib/remoteplayer/settings.json"
+# Read by remoteplayer-mpv.service through EnvironmentFile=.
+args-env-file = "/var/lib/remoteplayer/mpv.env"
+executable = "/usr/bin/mpv"
+restart-timeout-seconds = 20
+request-timeout-seconds = 5
+# POST /api/v1/player/ipc forwards commands to mpv. A deny-list blocks the known
+# dangerous ones, but treat this endpoint as full control over the player user.
+raw-ipc-enabled = true
+
+[service-manager]
+kind = "systemd"
+unit = "remoteplayer-mpv.service"
+
+[cec]
+kind = "linux"
+device = "/dev/cec0"
+# Register the Pi as a CEC playback device if nobody has done so yet;
+# without a logical address the bus cannot be queried.
+claim-logical-address = true
+osd-name = "remoteplayer"
+
+[display]
+preferred-connector = "HDMI-A-1"
+
+[system]
+# Reboot / power off through systemd-logind (allowed by the polkit rule).
+power = "logind"
+
+[restore]
+# Restore playback from the watcher's snapshot when mpv crashes and systemd restarts it.
+after-crash = true
+watcher-state-file = "/var/lib/remoteplayer-mpvwatcher/state.json"
+
+# Overrides of the built-in mpv defaults (the tested Raspberry Pi 3 command line).
+# Keys are mpv option names; an empty string means "do not pass this option".
+# [player-defaults]
+# audio-device = "alsa/plughw:CARD=Headphones,DEV=0"

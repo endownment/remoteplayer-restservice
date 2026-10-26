@@ -1,0 +1,24 @@
+[Unit]
+Description=remoteplayer: mpv on the TV
+After=systemd-user-sessions.service sound.target
+
+[Service]
+User=coop
+SupplementaryGroups=video render audio
+# Creates /run/remoteplayer-mpv for the IPC socket; removed again when mpv stops.
+RuntimeDirectory=remoteplayer-mpv
+RuntimeDirectoryMode=0700
+# The socket is only for processes of the same user: remoteplayer-restservice,
+# remoteplayer-mpvwatcher and other IPC clients such as jellyfin-mpv-shim.
+UMask=0077
+# Written by remoteplayer-restservice from its settings ("-": start even if missing).
+EnvironmentFile=-/var/lib/remoteplayer/mpv.env
+# Fixed options here; tunable ones arrive through $REMOTEPLAYER_MPV_ARGS. The
+# variable is written without braces on purpose: systemd then splits it at
+# whitespace into separate arguments (see systemd.service(5), "Command lines").
+ExecStart=/usr/bin/mpv --no-terminal --idle=yes --input-ipc-server=/run/remoteplayer-mpv/mpv.sock $REMOTEPLAYER_MPV_ARGS
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

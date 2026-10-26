@@ -1,0 +1,35 @@
+[Unit]
+Description=remoteplayer REST API
+Wants=network-online.target
+After=network-online.target remoteplayer-mpv.service
+
+[Service]
+# The service reports readiness itself (sd_notify) once it is listening.
+Type=notify
+User=coop
+# video: /dev/cec0 and vcgencmd; systemd-journal: GET /api/v1/player/log.
+SupplementaryGroups=video systemd-journal
+# /var/lib/remoteplayer: settings.json and the mpv.env read by remoteplayer-mpv.service.
+StateDirectory=remoteplayer
+StateDirectoryMode=0750
+ExecStart=/usr/local/bin/remoteplayer-restservice --config /etc/remoteplayer/restservice.toml
+Restart=on-failure
+RestartSec=2
+
+# Sandboxing: the whole filesystem is read-only for this service except the
+# state directory and the media library. If storage.upload-root is moved,
+# update ReadWritePaths (and ProtectHome when it is below /home).
+ProtectSystem=strict
+ReadWritePaths=/srv/remoteplayer/media
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# PrivateDevices= is deliberately absent: it would hide /dev/cec0.
+
+[Install]
+WantedBy=multi-user.target

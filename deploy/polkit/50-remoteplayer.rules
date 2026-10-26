@@ -1,0 +1,24 @@
+// Installed as /etc/polkit-1/rules.d/50-remoteplayer.rules
+//
+// Lets the remoteplayer services, which run as the user "coop", start, stop and
+// restart their own mpv unit and reboot or power off the Pi. Nothing else is
+// granted: in particular not editing or enabling unit files, which would be
+// equivalent to root access.
+
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "coop") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") === "remoteplayer-mpv.service" &&
+        ["start", "stop", "restart"].indexOf(action.lookup("verb")) >= 0) {
+        return polkit.Result.YES;
+    }
+    if (["org.freedesktop.login1.reboot",
+         "org.freedesktop.login1.reboot-multiple-sessions",
+         "org.freedesktop.login1.power-off",
+         "org.freedesktop.login1.power-off-multiple-sessions"].indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
