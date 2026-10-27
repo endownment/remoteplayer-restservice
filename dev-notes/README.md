@@ -19,6 +19,7 @@
 | [09-testing-without-pi.md](09-testing-without-pi.md) | заглушки и как всё проверить на обычном Linux |
 | [10-hdmi-cec-and-unsafe.md](10-hdmi-cec-and-unsafe.md) | CEC, ioctl и единственный `unsafe` в проекте |
 | [11-code-style.md](11-code-style.md) | правила оформления кода в этом проекте |
+| [12-packaging-and-ci.md](12-packaging-and-ci.md) | deb-пакеты, GitHub Actions, журнал systemd, код выхода 78 |
 
 Как читать сам код: `src/main.rs` → `src/app_context.rs` → `src/routes/mod.rs`
 (карта всех эндпоинтов) → нужный обработчик в `src/routes/*.rs` → модуль,

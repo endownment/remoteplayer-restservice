@@ -1,12 +1,13 @@
-// Installed as /etc/polkit-1/rules.d/50-remoteplayer.rules
+// Shipped as /usr/share/polkit-1/rules.d/50-remoteplayer.rules by the package
+// (for a manual installation copy it to /etc/polkit-1/rules.d/).
 //
-// Lets the remoteplayer services, which run as the user "coop", start, stop and
+// Lets the remoteplayer services, which run as the user "remoteplayer", start, stop and
 // restart their own mpv unit and reboot or power off the Pi. Nothing else is
 // granted: in particular not editing or enabling unit files, which would be
 // equivalent to root access.
 
 polkit.addRule(function (action, subject) {
-    if (subject.user !== "coop") {
+    if (subject.user !== "remoteplayer") {
         return polkit.Result.NOT_HANDLED;
     }
     if (action.id === "org.freedesktop.systemd1.manage-units" &&

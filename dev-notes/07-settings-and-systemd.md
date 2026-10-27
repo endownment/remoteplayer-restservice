@@ -153,7 +153,7 @@ async-методами. Метод `restart_unit` превращается в в
 
 ## polkit
 
-`deploy/polkit/50-remoteplayer.rules` разрешает пользователю `coop`:
+`deploy/polkit/50-remoteplayer.rules` разрешает системному пользователю `remoteplayer`:
 
 - `org.freedesktop.systemd1.manage-units` для `unit == remoteplayer-mpv.service`
   и `verb` из `start`/`stop`/`restart`;

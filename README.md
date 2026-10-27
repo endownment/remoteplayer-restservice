@@ -73,52 +73,95 @@ in [dev-notes/09-testing-without-pi.md](dev-notes/09-testing-without-pi.md).
 
 ## Installation on the Raspberry Pi
 
-Target: Raspberry Pi OS (Debian 13 "trixie") Lite, mpv 0.40, user `coop`
-(replace it in the unit files and the polkit rule if yours differs). Build the
-binary first, see [BUILD.md](BUILD.md).
+Target: Raspberry Pi OS (Debian 12 "bookworm" or 13 "trixie"), 64-bit
+(`arm64`) or 32-bit (`armhf`), with mpv ≥ 0.38. The services run as the
+system user `remoteplayer`, which the package creates.
+
+### From the Debian packages (recommended)
+
+Every tagged release on GitHub carries `.deb` files for `arm64`, `armhf` and
+`amd64` (see BUILD.md, "Debian packages"; builds of every push are attached to
+the workflow run as artifacts).
 
 ```sh
-# Binary
-sudo install -m 0755 target/release/remoteplayer-restservice /usr/local/bin/
+sudo apt install ./remoteplayer-restservice_0.1.0-1_arm64.deb ./remoteplayer-mpvwatcher_0.1.0-1_arm64.deb
+```
 
-# Configuration — then edit the token: openssl rand -hex 24
+The package installs:
+
+| What | Where |
+|---|---|
+| the binary | `/usr/bin/remoteplayer-restservice` |
+| configuration (kept on upgrades, `0640 root:remoteplayer`) | `/etc/remoteplayer/restservice.toml` |
+| units | `remoteplayer-restservice.service`, `remoteplayer-mpv.service` in `/usr/lib/systemd/system` |
+| polkit rule | `/usr/share/polkit-1/rules.d/50-remoteplayer.rules` |
+| user, directories | `remoteplayer`; `/srv/remoteplayer/media`, `/srv/remoteplayer/state/restservice` |
+| Avahi example, docs | `/usr/share/doc/remoteplayer-restservice/` |
+
+Nothing is enabled or started on installation, because the configuration
+needs a token first:
+
+```sh
+sudoedit /etc/remoteplayer/restservice.toml        # auth.token: openssl rand -hex 24
+sudo systemctl enable --now remoteplayer-mpv.service remoteplayer-restservice.service
+sudo systemctl enable --now remoteplayer-mpvwatcher.service
+```
+
+An upgrade restarts the API (if it runs) but leaves mpv alone, so playback
+is not interrupted. `apt remove` stops and disables the units. Even `apt purge`
+keeps the user and `/srv/remoteplayer` (your media and settings).
+
+### By hand
+
+Build the binary first (BUILD.md), then:
+
+```sh
+sudo adduser --system --group --home /var/lib/remoteplayer remoteplayer
+sudo install -m 0755 target/release/remoteplayer-restservice /usr/bin/
 sudo install -d /etc/remoteplayer
-sudo install -m 0640 -g coop config/restservice.toml /etc/remoteplayer/restservice.toml
-
-# The writable part (see "Read-only SD card"): media library and settings.
-# On a fully read-only system skip this; the service then runs read-only.
-sudo install -d -o coop -g coop /srv/remoteplayer/media /srv/remoteplayer/state/restservice
-
-# Groups: /dev/cec0 and vcgencmd (video), the mpv log (systemd-journal)
-sudo usermod -aG video,render,audio,systemd-journal coop
-
-# systemd units, polkit rule, mDNS announcement
-sudo install -m 0644 deploy/systemd/remoteplayer-mpv.service /etc/systemd/system/
-sudo install -m 0644 deploy/systemd/remoteplayer-restservice.service /etc/systemd/system/
+sudo install -m 0640 -g remoteplayer config/restservice.toml /etc/remoteplayer/restservice.toml   # then set the token
+sudo install -d -o remoteplayer -g remoteplayer /srv/remoteplayer/media /srv/remoteplayer/state/restservice
+sudo install -m 0644 deploy/systemd/remoteplayer-mpv.service deploy/systemd/remoteplayer-restservice.service /etc/systemd/system/
 sudo install -m 0644 deploy/polkit/50-remoteplayer.rules /etc/polkit-1/rules.d/
 sudo install -m 0644 deploy/avahi/remoteplayer.service /etc/avahi/services/   # if avahi-daemon is installed
-
 sudo systemctl daemon-reload
 sudo systemctl enable --now remoteplayer-mpv.service remoteplayer-restservice.service
 ```
 
-Install remoteplayer-mpvwatcher as well; without it there is no automatic
-restore.
+The units add the groups the services need (`video`, `render`, `audio`,
+`systemd-journal`) themselves; the user does not have to be in them. Install
+remoteplayer-mpvwatcher as well; without it there is no automatic restore.
 
 If you used the earlier hand-written `remoteplayer-mpd.service`, disable it
 first: `sudo systemctl disable --now remoteplayer-mpd.service`. The new unit
-keeps the same mpv command line, but the IPC socket moves to
-`/run/remoteplayer-mpv/mpv.sock` and the tunable options come from
+keeps the same mpv command line, but runs as `remoteplayer`, the IPC socket
+moves to `/run/remoteplayer-mpv/mpv.sock` and the tunable options come from
 `/srv/remoteplayer/state/restservice/mpv.env`, which this service writes.
 
-Check it:
+### Checking and logs
 
 ```sh
 systemctl status remoteplayer-restservice
 curl -s http://raspberrypi.local:8080/api/v1/health
 curl -s -H "Authorization: Bearer $TOKEN" http://raspberrypi.local:8080/api/v1/storage   # "mode": "read-write"?
-journalctl -u remoteplayer-restservice -f
 ```
+
+Under systemd the services log through the native journal protocol, so
+levels and fields are kept:
+
+```sh
+journalctl -u remoteplayer-restservice -f                # follow
+journalctl -u 'remoteplayer-*' -p warning -b             # warnings and errors of this boot, all services
+journalctl -u remoteplayer-restservice F_SOCKET=/run/remoteplayer-mpv/mpv.sock   # by field (F_ + field name)
+sudo systemctl edit remoteplayer-restservice              # add: [Service] Environment=RUST_LOG=debug
+```
+
+What to expect: one line when mpv's socket is not there yet ("waiting for its
+socket"), one when it is picked up ("connected to mpv"), one warning when it
+is lost, and one when it is back — never a line per reconnect attempt. A
+broken configuration ends the service with exit status 78 and the reason;
+`RestartPreventExitStatus=78` keeps systemd from restarting it in a loop, so
+`systemctl status` shows it as failed with the message right there.
 
 ### Read-only SD card
 

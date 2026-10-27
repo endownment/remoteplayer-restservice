@@ -21,6 +21,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-uti
 toml = "0.8"
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
+tracing-journald = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 xattr = "1"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
@@ -30,3 +31,31 @@ tempfile = "3"
 
 [profile.release]
 strip = true
+
+# `cargo deb` (https://github.com/kornelski/cargo-deb) builds the Debian package
+# from this section; CI does it for amd64, arm64 and armhf (see BUILD.md).
+[package.metadata.deb]
+maintainer = "remoteplayer <remoteplayer@localhost>"
+copyright = "remoteplayer authors"
+section = "video"
+priority = "optional"
+depends = "libc6 (>= 2.36), adduser, mpv (>= 0.38), polkitd | policykit-1"
+recommends = "remoteplayer-mpvwatcher, avahi-daemon"
+extended-description = """\
+REST API for remoteplayer: controls an mpv instance that plays video on a \
+Raspberry Pi attached to a TV, manages its settings and media library, and \
+reports audio outputs, display, HDMI-CEC devices and board health. Ships the \
+mpv unit (remoteplayer-mpv.service) and a polkit rule that lets the service \
+restart it. Nothing is enabled on installation."""
+maintainer-scripts = "packaging/debian/"
+assets = [
+    ["target/release/remoteplayer-restservice", "usr/bin/", "755"],
+    ["config/restservice.toml", "etc/remoteplayer/restservice.toml", "640"],
+    ["deploy/systemd/remoteplayer-restservice.service", "usr/lib/systemd/system/", "644"],
+    ["deploy/systemd/remoteplayer-mpv.service", "usr/lib/systemd/system/", "644"],
+    ["deploy/polkit/50-remoteplayer.rules", "usr/share/polkit-1/rules.d/", "644"],
+    ["deploy/avahi/remoteplayer.service", "usr/share/doc/remoteplayer-restservice/examples/avahi-remoteplayer.service", "644"],
+    ["config/dev.toml", "usr/share/doc/remoteplayer-restservice/examples/dev.toml", "644"],
+    ["README.md", "usr/share/doc/remoteplayer-restservice/", "644"],
+    ["docs/API.md", "usr/share/doc/remoteplayer-restservice/", "644"],
+]

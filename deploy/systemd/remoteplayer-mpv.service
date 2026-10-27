@@ -3,7 +3,8 @@ Description=remoteplayer: mpv on the TV
 After=systemd-user-sessions.service sound.target
 
 [Service]
-User=coop
+# The system user created by the package (manual installation: see README).
+User=remoteplayer
 SupplementaryGroups=video render audio
 # Creates /run/remoteplayer-mpv for the IPC socket; removed again when mpv stops.
 RuntimeDirectory=remoteplayer-mpv

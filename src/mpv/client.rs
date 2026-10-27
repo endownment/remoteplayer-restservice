@@ -240,16 +240,26 @@ impl ConnectionTask {
     // fields until it ends; nobody else can reach them.
     async fn run(mut self) {
         let mut generation: u64 = 0;
+        // Each connect attempt every 0.5 s is not logged; only the changes are.
+        let mut waiting_reported: bool = false;
         loop {
-            if let Ok(stream) = UnixStream::connect(&self.socket_path).await {
-                generation += 1;
-                tracing::info!(socket = %self.socket_path.display(), generation, "connected to mpv");
-                let end: ConnectionEnd = self.serve(stream, generation).await;
-                self.state.send_replace(ConnectionState::Disconnected);
-                if let ConnectionEnd::AllHandlesDropped = end {
-                    return;
+            match UnixStream::connect(&self.socket_path).await {
+                Ok(stream) => {
+                    generation += 1;
+                    tracing::info!(socket = %self.socket_path.display(), generation, "connected to mpv");
+                    let end: ConnectionEnd = self.serve(stream, generation).await;
+                    self.state.send_replace(ConnectionState::Disconnected);
+                    if let ConnectionEnd::AllHandlesDropped = end {
+                        return;
+                    }
+                    tracing::warn!(socket = %self.socket_path.display(), "connection to mpv lost, waiting for it to come back");
+                    waiting_reported = true;
                 }
-                tracing::warn!("connection to mpv lost, reconnecting");
+                Err(error) if !waiting_reported => {
+                    tracing::info!(socket = %self.socket_path.display(), %error, "mpv is not reachable yet, waiting for its socket");
+                    waiting_reported = true;
+                }
+                Err(_) => {}
             }
             if !self.reject_queued_requests() {
                 return;

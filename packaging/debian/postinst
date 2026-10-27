@@ -1,0 +1,44 @@
+#!/bin/sh
+# Runs after the files are unpacked (install and upgrade).
+set -e
+
+if [ "$1" = "configure" ]; then
+    # The services and mpv run as this system user; the units add the groups
+    # they need (video, render, audio, systemd-journal) themselves.
+    if ! getent passwd remoteplayer >/dev/null; then
+        adduser --system --group --home /var/lib/remoteplayer --no-create-home \
+            --gecos "remoteplayer services" remoteplayer
+    fi
+    # The user's home: mpv keeps its caches there while it is writable.
+    install -d -o remoteplayer -g remoteplayer -m 0750 /var/lib/remoteplayer
+
+    # The configuration holds the API token: readable by the service, not by everyone.
+    chgrp remoteplayer /etc/remoteplayer/restservice.toml
+    chmod 0640 /etc/remoteplayer/restservice.toml
+
+    # The writable part of the system (README, "Read-only SD card"). If a
+    # partition is mounted there later, create these on it as well.
+    install -d -m 0755 /srv/remoteplayer /srv/remoteplayer/state 2>/dev/null || true
+    install -d -o remoteplayer -g remoteplayer -m 0750 \
+        /srv/remoteplayer/media /srv/remoteplayer/state/restservice 2>/dev/null || true
+
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        # On upgrade restart the API if it runs. mpv is left alone: restarting it
+        # would interrupt playback; it picks up a changed unit on its next start.
+        systemctl try-restart remoteplayer-restservice.service || true
+    fi
+
+    if ! systemctl is-enabled --quiet remoteplayer-restservice.service 2>/dev/null; then
+        cat <<'MESSAGE'
+
+remoteplayer-restservice is installed but not enabled.
+  1. Set auth.token in /etc/remoteplayer/restservice.toml  (openssl rand -hex 24)
+  2. sudo systemctl enable --now remoteplayer-mpv.service remoteplayer-restservice.service
+  3. journalctl -u remoteplayer-restservice -f
+
+MESSAGE
+    fi
+fi
+
+exit 0

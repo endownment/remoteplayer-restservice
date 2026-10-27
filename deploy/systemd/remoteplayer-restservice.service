@@ -1,19 +1,23 @@
 [Unit]
 Description=remoteplayer REST API
-Wants=network-online.target
+Documentation=https://github.com/endownment/remoteplayer-restservice
+Wants=network-online.target remoteplayer-mpv.service
 After=network-online.target remoteplayer-mpv.service
 
 [Service]
 # The service reports readiness itself (sd_notify) once it is listening.
 Type=notify
-User=coop
+User=remoteplayer
 # video: /dev/cec0 and vcgencmd; systemd-journal: GET /api/v1/player/log.
 SupplementaryGroups=video systemd-journal
 # No StateDirectory=: on a read-only root systemd could not create it, and the
 # unit would fail to start. Settings and media live on /srv/remoteplayer.
-ExecStart=/usr/local/bin/remoteplayer-restservice --config /etc/remoteplayer/restservice.toml
+ExecStart=/usr/bin/remoteplayer-restservice --config /etc/remoteplayer/restservice.toml
 Restart=on-failure
-RestartSec=2
+RestartSec=5
+# Exit status 78 (EX_CONFIG) means "the configuration is wrong": restarting
+# would not help, so the unit stays failed with the reason in the journal.
+RestartPreventExitStatus=78
 
 # Sandboxing: the whole filesystem is read-only for this service except the
 # writable partition. "-" lets the unit start without it (a fully read-only

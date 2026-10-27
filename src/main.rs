@@ -26,9 +26,11 @@ use tokio::net::TcpListener;
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::FromEnvError;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::app_context::AppContext;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, ConfigError};
 
 #[derive(Debug, Parser)]
 #[command(version, about = "REST API for the remoteplayer mpv instance")]
@@ -48,8 +50,20 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!("{error}");
-            ExitCode::FAILURE
+            exit_code_for(error.as_ref())
         }
+    }
+}
+
+/// EX_CONFIG from sysexits.h: the unit's `RestartPreventExitStatus=78` keeps
+/// systemd from restarting a service whose configuration is wrong.
+const EXIT_CONFIGURATION_ERROR: u8 = 78;
+
+fn exit_code_for(error: &(dyn std::error::Error + 'static)) -> ExitCode {
+    if error.downcast_ref::<ConfigError>().is_some() {
+        ExitCode::from(EXIT_CONFIGURATION_ERROR)
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -72,15 +86,26 @@ async fn run(command_line: CommandLine) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn init_logging() {
-    let filter: EnvFilter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_unset: FromEnvError| EnvFilter::new("info"));
-    // journald stamps every line itself and does not render ANSI colors.
+    // Under systemd, log through the native journal protocol instead of plain
+    // stderr lines: every event keeps its level as the journal priority (so
+    // `journalctl -p warning` works) and its fields (socket=, pid=, ...) become
+    // searchable journal fields with an F_ prefix (`journalctl F_SOCKET=...`).
     let under_journald: bool = std::env::var_os("JOURNAL_STREAM").is_some();
     if under_journald {
-        tracing_subscriber::fmt().with_env_filter(filter).without_time().with_ansi(false).init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        match tracing_journald::layer() {
+            Ok(journald) => {
+                tracing_subscriber::registry().with(log_filter()).with(journald).init();
+                return;
+            }
+            Err(error) => eprintln!("cannot connect to journald ({error}); logging to stderr instead"),
+        }
     }
+    tracing_subscriber::fmt().with_env_filter(log_filter()).init();
+}
+
+/// `RUST_LOG` when set (e.g. `RUST_LOG=debug` in a unit drop-in), else `info`.
+fn log_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_unset: FromEnvError| EnvFilter::new("info"))
 }
 
 /// With `Type=notify` systemd waits for this message before it considers the
