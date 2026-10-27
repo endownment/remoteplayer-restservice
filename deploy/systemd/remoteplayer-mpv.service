@@ -1,0 +1,38 @@
+[Unit]
+Description=remoteplayer: mpv on the TV
+After=systemd-user-sessions.service sound.target
+# Never give up restarting: remoteplayer-restservice restarts mpv on settings
+# changes, and a few changes in a row must not trip systemd's start limit.
+StartLimitIntervalSec=0
+
+[Service]
+# The system user created by the package. To run mpv as someone else, change
+# only User= in a drop-in (README, "Running as another user"): the group stays,
+# so the socket and the files remain shared.
+User=remoteplayer
+Group=remoteplayer
+SupplementaryGroups=video render audio
+# Creates /run/remoteplayer-mpv for the IPC socket; removed again when mpv stops.
+RuntimeDirectory=remoteplayer-mpv
+RuntimeDirectoryMode=0750
+UMask=0007
+# Written by remoteplayer-restservice from its settings ("-": start even if
+# missing — then mpv runs with its own defaults for the tunable options).
+EnvironmentFile=-/srv/remoteplayer/state/restservice/mpv.env
+# Fixed options here; tunable ones arrive through $REMOTEPLAYER_MPV_ARGS. The
+# variable is written without braces on purpose: systemd then splits it at
+# whitespace into separate arguments (see systemd.service(5), "Command lines").
+ExecStart=/usr/bin/mpv --no-terminal --idle=yes --input-ipc-server=/run/remoteplayer-mpv/mpv.sock $REMOTEPLAYER_MPV_ARGS
+# The socket is for members of the group remoteplayer: remoteplayer-restservice,
+# remoteplayer-mpvwatcher and other IPC clients such as jellyfin-mpv-shim
+# (README, "Other programs using mpv"). mpv always creates it as 0600,
+# whatever the umask, so it is opened to the group once it appears. The unit
+# counts as started only after this, so After=remoteplayer-mpv.service means
+# "the socket is ready". No socket within 20 s fails the start, and
+# Restart=always tries again. ($$ is a literal $ for the shell.)
+ExecStartPost=/bin/sh -c 'for attempt in $$(seq 100); do if [ -S "$$0" ]; then exec chmod 0660 "$$0"; fi; sleep 0.2; done; echo "mpv did not create its IPC socket $$0 within 20 s" >&2; exit 1' /run/remoteplayer-mpv/mpv.sock
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

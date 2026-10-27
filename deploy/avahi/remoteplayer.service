@@ -1,0 +1,20 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!--
+  Installed as /etc/avahi/services/remoteplayer.service
+  Announces the API on the local network, so clients find the Pi by name
+  (http://<hostname>.local:8080) or by browsing for _remoteplayer._tcp.
+-->
+<service-group>
+  <name replace-wildcards="yes">remoteplayer on %h</name>
+  <service>
+    <type>_remoteplayer._tcp</type>
+    <port>8080</port>
+    <txt-record>api=/api/v1</txt-record>
+  </service>
+  <service>
+    <type>_http._tcp</type>
+    <port>8080</port>
+    <txt-record>path=/api/v1/health</txt-record>
+  </service>
+</service-group>

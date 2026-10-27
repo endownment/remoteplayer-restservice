@@ -1,0 +1,56 @@
+[Unit]
+Description=remoteplayer REST API
+Documentation=https://github.com/endownment/remoteplayer-restservice
+Wants=network-online.target remoteplayer-mpv.service
+After=network-online.target remoteplayer-mpv.service
+# The Pi runs unattended: keep restarting after failures, however many.
+StartLimitIntervalSec=0
+
+[Service]
+# The service reports readiness itself (sd_notify) once it is listening.
+Type=notify
+# To run as someone else, change only User= in a drop-in (README, "Running as
+# another user"); the group keeps the shared files and sockets accessible.
+User=remoteplayer
+Group=remoteplayer
+# Uploads and settings stay writable for the group, not for others.
+UMask=0007
+# Output of child processes (journalctl, vcgencmd, mpv) in English regardless
+# of the system locale; it ends up in API answers and in the journal.
+Environment=LC_ALL=C.UTF-8
+# video: /dev/cec0 and vcgencmd; systemd-journal: GET /api/v1/player/log.
+SupplementaryGroups=video systemd-journal
+# No StateDirectory=: on a read-only root systemd could not create it, and the
+# unit would fail to start. Settings and media live on /srv/remoteplayer.
+# The configuration holds the API token, so it is readable by root only
+# (0600). systemd copies it at every start into a directory only this service
+# can read (%d = /run/credentials/remoteplayer-restservice.service): the
+# group remoteplayer, which other programs may join, never sees the token.
+# Changes take effect with a restart; errors name the copied path.
+LoadCredential=restservice.toml:/etc/remoteplayer/restservice.toml
+ExecStart=/usr/bin/remoteplayer-restservice --config %d/restservice.toml
+Restart=on-failure
+RestartSec=5
+# Exit status 78 (EX_CONFIG) means "the configuration is wrong": restarting
+# would not help, so the unit stays failed with the reason in the journal.
+RestartPreventExitStatus=78
+
+# Sandboxing: the whole filesystem is read-only for this service except the
+# writable partition. "-" lets the unit start without it (a fully read-only
+# system); the service then refuses changes with a clear error. If you move
+# the paths in the configuration, update ReadWritePaths (and ProtectHome when
+# they are below /home).
+ProtectSystem=strict
+ReadWritePaths=-/srv/remoteplayer
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# PrivateDevices= is deliberately absent: it would hide /dev/cec0.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,72 @@
+# remoteplayer-restservice configuration for the Raspberry Pi.
+# Installed as /etc/remoteplayer/restservice.toml (see README.md, "Installation").
+#
+# Everything this service writes lives below /srv/remoteplayer, the writable
+# partition (README.md, "Read-only SD card"). Without it the service still runs:
+# library changes and uploads are refused, settings cannot be changed.
+
+listen = "0.0.0.0:8080"
+
+[auth]
+# Every request except /api/v1/health needs "Authorization: Bearer <token>".
+# Generate a token with:  openssl rand -hex 24
+token = "CHANGE-ME"
+
+[storage]
+# Files live in first-level folders below this directory, never in the root itself.
+# Comment out to run without a media library (the library endpoints answer 501).
+upload-root = "/srv/remoteplayer/media"
+# Folder used by POST /api/v1/uploads when no ?folder= is given.
+default-folder = "inbox"
+# Uploads are refused when they would leave less free space than this (256 MiB).
+min-free-bytes = 268435456
+# Optional hard limit per upload, in bytes.
+# max-upload-bytes = 21474836480
+# Uploads to tmpfs or an overlay would fill the RAM, so they are refused.
+allow-volatile = false
+
+[mpv]
+ipc-socket = "/run/remoteplayer-mpv/mpv.sock"
+settings-file = "/srv/remoteplayer/state/restservice/settings.json"
+# Read by remoteplayer-mpv.service through EnvironmentFile= (same path there).
+args-env-file = "/srv/remoteplayer/state/restservice/mpv.env"
+executable = "/usr/bin/mpv"
+restart-timeout-seconds = 20
+request-timeout-seconds = 5
+# POST /api/v1/player/ipc forwards commands to mpv. A deny-list blocks the known
+# dangerous ones, but treat this endpoint as full control over the player user.
+raw-ipc-enabled = true
+
+[service-manager]
+kind = "systemd"
+unit = "remoteplayer-mpv.service"
+
+[cec]
+kind = "linux"
+device = "/dev/cec0"
+# Register the Pi as a CEC playback device if nobody has done so yet;
+# without a logical address the bus cannot be queried.
+claim-logical-address = true
+osd-name = "remoteplayer"
+
+[display]
+preferred-connector = "HDMI-A-1"
+
+[system]
+# Reboot / power off through systemd-logind (allowed by the polkit rule).
+power = "logind"
+
+[restore]
+# Playback is restored from remoteplayer-mpvwatcher's `last` snapshot whenever an
+# mpv appears that is still empty while the snapshot comes from another mpv:
+# after mpv crashed and systemd restarted it ...
+after-crash = true
+# ... and when this service starts, e.g. after a reboot. That only finds a
+# snapshot if the watcher could keep it in its state file.
+on-start = true
+watcher-socket = "/run/remoteplayer-mpvwatcher/state.sock"
+
+# Overrides of the built-in mpv defaults (the tested Raspberry Pi 3 command line).
+# Keys are mpv option names; an empty string means "do not pass this option".
+# [player-defaults]
+# audio-device = "alsa/plughw:CARD=Headphones,DEV=0"
