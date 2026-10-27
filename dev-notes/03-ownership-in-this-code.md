@@ -67,8 +67,9 @@ pub type SharedContext = Arc<AppContext>;
 Для изменения внутри нужна синхронизация (`Mutex`, `RwLock`, атомики), см.
 `SettingsStore::current` (`RwLock`) и `planned_restart` (`AtomicBool`).
 
-`Arc<str>` в mpvwatcher — та же идея для строки: все клиенты сокета получают
-указатель на один и тот же текст.
+В mpvwatcher так же устроен `Arc<Sampler>`: соединением с mpv пользуются
+таймер файла и клиенты сокета, а изменяемое состояние внутри защищено
+`tokio::sync::Mutex`.
 
 ## RAII и отмена: `PartialFile`
 
@@ -127,8 +128,8 @@ if let Some(stdout) = child.stdout.take() { tokio::spawn(collect_output(stdout, 
 отдельная задача.
 
 ```rust
-// mpvwatcher, src/main.rs
-match self.connection.as_mut() { Some(connection) => capture(connection).await, ... }
+// mpvwatcher, src/sampler.rs
+match state.connection.as_mut() { Some(connection) => capture(connection).await, ... }
 ```
 
 `as_mut()` превращает `&mut Option<T>` в `Option<&mut T>`: это заимствование

@@ -51,6 +51,8 @@ power = "logind"
 
 [restore]
 # Restore playback from the watcher's snapshot when mpv crashes and systemd restarts it.
+# Needs `state-file` enabled in the watcher's configuration: its socket only
+# reports the live state, which after a crash is the new, empty mpv.
 after-crash = true
 watcher-state-file = "/var/lib/remoteplayer-mpvwatcher/state.json"
 

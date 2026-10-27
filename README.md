@@ -11,7 +11,7 @@ It is one of the remoteplayer components:
 |---|---|
 | `remoteplayer-mpv.service` | mpv itself, fullscreen on DRM, with a JSON IPC socket (unit in [`deploy/systemd`](deploy/systemd)) |
 | **remoteplayer-restservice** | this repository: the HTTP API |
-| [remoteplayer-mpvwatcher](https://github.com/endownment/remoteplayer-mpvwatcher) | records the playback state every 7 s, so it can be restored after a crash |
+| [remoteplayer-mpvwatcher](https://github.com/endownment/remoteplayer-mpvwatcher) | records the playback state to a file every 7 s, so it can be restored after a crash; answers live `get` requests on its socket |
 | remoteplayer-webcontrol | the web UI (planned) |
 
 Other mpv IPC clients (for example jellyfin-mpv-shim) can share the same mpv
