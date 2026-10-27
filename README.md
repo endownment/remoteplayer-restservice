@@ -75,7 +75,8 @@ in [dev-notes/09-testing-without-pi.md](dev-notes/09-testing-without-pi.md).
 
 Target: Raspberry Pi OS (Debian 12 "bookworm" or 13 "trixie"), 64-bit
 (`arm64`) or 32-bit (`armhf`), with mpv ≥ 0.38. The services run as the
-system user `remoteplayer`, which the package creates.
+system user `remoteplayer` and share its group `remoteplayer`, which the
+package creates; other programs get access to mpv by joining the group.
 
 ### From the Debian packages (recommended)
 
@@ -92,10 +93,10 @@ The package installs:
 | What | Where |
 |---|---|
 | the binary | `/usr/bin/remoteplayer-restservice` |
-| configuration (kept on upgrades, `0640 root:remoteplayer`) | `/etc/remoteplayer/restservice.toml` |
+| configuration (kept on upgrades, `0600 root:root`) | `/etc/remoteplayer/restservice.toml` |
 | units | `remoteplayer-restservice.service`, `remoteplayer-mpv.service` in `/usr/lib/systemd/system` |
 | polkit rule | `/usr/share/polkit-1/rules.d/50-remoteplayer.rules` |
-| user, directories | `remoteplayer`; `/srv/remoteplayer/media`, `/srv/remoteplayer/state/restservice` |
+| user and group, directories (`2770`) | `remoteplayer`; `/srv/remoteplayer/media`, `/srv/remoteplayer/state/restservice` |
 | Avahi example, docs | `/usr/share/doc/remoteplayer-restservice/` |
 
 Nothing is enabled or started on installation, because the configuration
@@ -119,8 +120,8 @@ Build the binary first (BUILD.md), then:
 sudo adduser --system --group --home /var/lib/remoteplayer remoteplayer
 sudo install -m 0755 target/release/remoteplayer-restservice /usr/bin/
 sudo install -d /etc/remoteplayer
-sudo install -m 0640 -g remoteplayer config/restservice.toml /etc/remoteplayer/restservice.toml   # then set the token
-sudo install -d -o remoteplayer -g remoteplayer /srv/remoteplayer/media /srv/remoteplayer/state/restservice
+sudo install -m 0600 config/restservice.toml /etc/remoteplayer/restservice.toml   # then set the token
+sudo install -d -o remoteplayer -g remoteplayer -m 2770 /srv/remoteplayer/media /srv/remoteplayer/state/restservice
 sudo install -m 0644 deploy/systemd/remoteplayer-mpv.service deploy/systemd/remoteplayer-restservice.service /etc/systemd/system/
 sudo install -m 0644 deploy/polkit/50-remoteplayer.rules /etc/polkit-1/rules.d/
 sudo install -m 0644 deploy/avahi/remoteplayer.service /etc/avahi/services/   # if avahi-daemon is installed
@@ -137,6 +138,77 @@ first: `sudo systemctl disable --now remoteplayer-mpd.service`. The new unit
 keeps the same mpv command line, but runs as `remoteplayer`, the IPC socket
 moves to `/run/remoteplayer-mpv/mpv.sock` and the tunable options come from
 `/srv/remoteplayer/state/restservice/mpv.env`, which this service writes.
+
+### Other programs using mpv
+
+remoteplayer is meant to run next to other programs that drive the same mpv
+(jellyfin-mpv-shim, scripts, home automation). Everything they may share is
+open to the group `remoteplayer`, nothing to others:
+
+| Group members get | Group members do not get |
+|---|---|
+| mpv's IPC socket `/run/remoteplayer-mpv/mpv.sock` (full control, including quitting mpv) | the API token: the configuration is `0600 root:root`, the unit passes it to the service with `LoadCredential=` |
+| the watcher's socket `/run/remoteplayer-mpvwatcher/state.sock` | rebooting or powering off (polkit grants that to the API's user only) |
+| reading and writing `/srv/remoteplayer/media` and `state/` | anything else in systemd |
+| starting, stopping and restarting `remoteplayer-mpv.service` | |
+
+To let a program in, add the user it runs as to the group, or — for a
+systemd service — only that service, with a drop-in:
+
+```sh
+sudo adduser jellyfin remoteplayer                   # the user, for all its processes (log in again / restart)
+sudo systemctl edit jellyfin-mpv-shim.service        # or only this service:
+#   [Unit]
+#   Wants=remoteplayer-mpv.service
+#   After=remoteplayer-mpv.service
+#   [Service]
+#   SupplementaryGroups=remoteplayer
+```
+
+Such a program must connect to the existing socket instead of starting its
+own mpv (for jellyfin-mpv-shim: `mpv_ext` on, `mpv_ext_start` off,
+`mpv_ext_ipc` = the socket path), and must reconnect when the socket goes
+away: mpv is restarted by settings changes (`PATCH /api/v1/settings` with
+options that need a restart) and after a crash. Neither remoteplayer service
+depends on such programs or stops them. `After=remoteplayer-mpv.service`
+is enough to start after the socket exists: the mpv unit counts as started
+only once the socket is there and open to the group (mpv itself always
+creates it as `0600`; the unit's `ExecStartPost=` opens it).
+
+All three units restart on failure without a limit (`StartLimitIntervalSec=0`):
+the Pi runs unattended, and quick successive settings changes must not trip
+systemd's start limit on mpv.
+
+### Running as another user
+
+The user is not a setting in `restservice.toml`: systemd starts the process
+already as that user, a program cannot choose it for itself without running
+as root first. It is set in the units, and a drop-in changes it without
+touching the packaged files. Because the units keep `Group=remoteplayer`,
+the user is the only thing that changes; sockets, directories and the polkit
+rule work by group.
+
+```sh
+NEW_USER=alice
+sudo adduser "$NEW_USER" remoteplayer
+for unit in remoteplayer-mpv remoteplayer-restservice remoteplayer-mpvwatcher; do
+    sudo mkdir -p "/etc/systemd/system/$unit.service.d"
+    printf '[Service]\nUser=%s\n' "$NEW_USER" | sudo tee "/etc/systemd/system/$unit.service.d/user.conf" >/dev/null
+done
+# Only when remoteplayer-restservice changes user: allow it to reboot / power off.
+sudo cp /usr/share/polkit-1/rules.d/50-remoteplayer.rules /etc/polkit-1/rules.d/
+sudo sed -i "s/^var POWER_USERS = .*/var POWER_USERS = [\"$NEW_USER\"];/" /etc/polkit-1/rules.d/50-remoteplayer.rules
+# Files written by earlier versions are not group-writable yet.
+sudo chmod -R g+rwX /srv/remoteplayer/media /srv/remoteplayer/state
+sudo systemctl daemon-reload
+sudo systemctl restart remoteplayer-mpv remoteplayer-restservice remoteplayer-mpvwatcher
+systemctl show -p User remoteplayer-mpv remoteplayer-restservice remoteplayer-mpvwatcher
+```
+
+Any subset works — e.g. only mpv as a desktop user, to use that user's
+PipeWire session. The copy in `/etc/polkit-1/rules.d/` takes precedence over
+the packaged rule and survives upgrades; polkit reloads it by itself. To undo,
+delete the `user.conf` drop-ins (and the polkit copy) and restart the units.
 
 ### Checking and logs
 

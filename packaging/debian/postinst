@@ -3,8 +3,10 @@
 set -e
 
 if [ "$1" = "configure" ]; then
-    # The services and mpv run as this system user; the units add the groups
-    # they need (video, render, audio, systemd-journal) themselves.
+    # The services and mpv run as this system user and its group. The group
+    # is what they share (sockets, media, state): other programs get access by
+    # joining it. The units add the device groups (video, render, audio,
+    # systemd-journal) themselves.
     if ! getent passwd remoteplayer >/dev/null; then
         adduser --system --group --home /var/lib/remoteplayer --no-create-home \
             --gecos "remoteplayer services" remoteplayer
@@ -12,14 +14,18 @@ if [ "$1" = "configure" ]; then
     # The user's home: mpv keeps its caches there while it is writable.
     install -d -o remoteplayer -g remoteplayer -m 0750 /var/lib/remoteplayer
 
-    # The configuration holds the API token: readable by the service, not by everyone.
-    chgrp remoteplayer /etc/remoteplayer/restservice.toml
-    chmod 0640 /etc/remoteplayer/restservice.toml
+    # The configuration holds the API token: root only. The unit hands it to
+    # the service with LoadCredential=, so the group remoteplayer, which other
+    # programs may join, cannot read it. Also corrects 0640 root:remoteplayer
+    # from earlier versions.
+    chown root:root /etc/remoteplayer/restservice.toml
+    chmod 0600 /etc/remoteplayer/restservice.toml
 
     # The writable part of the system (README, "Read-only SD card"). If a
-    # partition is mounted there later, create these on it as well.
+    # partition is mounted there later, create these on it as well. 2770:
+    # writable for the group, and the setgid bit keeps new files in it.
     install -d -m 0755 /srv/remoteplayer /srv/remoteplayer/state 2>/dev/null || true
-    install -d -o remoteplayer -g remoteplayer -m 0750 \
+    install -d -o remoteplayer -g remoteplayer -m 2770 \
         /srv/remoteplayer/media /srv/remoteplayer/state/restservice 2>/dev/null || true
 
     if [ -d /run/systemd/system ]; then

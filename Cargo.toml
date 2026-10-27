@@ -50,7 +50,7 @@ restart it. Nothing is enabled on installation."""
 maintainer-scripts = "packaging/debian/"
 assets = [
     ["target/release/remoteplayer-restservice", "usr/bin/", "755"],
-    ["config/restservice.toml", "etc/remoteplayer/restservice.toml", "640"],
+    ["config/restservice.toml", "etc/remoteplayer/restservice.toml", "600"],
     ["deploy/systemd/remoteplayer-restservice.service", "usr/lib/systemd/system/", "644"],
     ["deploy/systemd/remoteplayer-mpv.service", "usr/lib/systemd/system/", "644"],
     ["deploy/polkit/50-remoteplayer.rules", "usr/share/polkit-1/rules.d/", "644"],

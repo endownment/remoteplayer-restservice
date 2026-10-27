@@ -1,24 +1,35 @@
 // Shipped as /usr/share/polkit-1/rules.d/50-remoteplayer.rules by the package
-// (for a manual installation copy it to /etc/polkit-1/rules.d/).
+// (for a manual installation copy it to /etc/polkit-1/rules.d/). To change it,
+// copy it to /etc/polkit-1/rules.d/ under the same name: that copy takes
+// precedence and survives package upgrades.
 //
-// Lets the remoteplayer services, which run as the user "remoteplayer", start, stop and
-// restart their own mpv unit and reboot or power off the Pi. Nothing else is
-// granted: in particular not editing or enabling unit files, which would be
-// equivalent to root access.
+// - Members of the group remoteplayer may start, stop and restart the mpv unit.
+//   They can already quit mpv through its IPC socket, so this grants nothing new.
+// - Only the users in POWER_USERS may reboot or power off the Pi: the API runs
+//   as one of them. Other programs in the group (IPC clients) may not.
+//
+// Nothing else is granted: in particular not editing or enabling unit files,
+// which would be equivalent to root access.
+
+var GROUP = "remoteplayer";
+// The user remoteplayer-restservice runs as (README, "Running as another user").
+var POWER_USERS = ["remoteplayer"];
+
+var POWER_ACTIONS = [
+    "org.freedesktop.login1.reboot",
+    "org.freedesktop.login1.reboot-multiple-sessions",
+    "org.freedesktop.login1.power-off",
+    "org.freedesktop.login1.power-off-multiple-sessions"
+];
 
 polkit.addRule(function (action, subject) {
-    if (subject.user !== "remoteplayer") {
-        return polkit.Result.NOT_HANDLED;
-    }
     if (action.id === "org.freedesktop.systemd1.manage-units" &&
         action.lookup("unit") === "remoteplayer-mpv.service" &&
-        ["start", "stop", "restart"].indexOf(action.lookup("verb")) >= 0) {
+        ["start", "stop", "restart"].indexOf(action.lookup("verb")) >= 0 &&
+        (subject.isInGroup(GROUP) || POWER_USERS.indexOf(subject.user) >= 0)) {
         return polkit.Result.YES;
     }
-    if (["org.freedesktop.login1.reboot",
-         "org.freedesktop.login1.reboot-multiple-sessions",
-         "org.freedesktop.login1.power-off",
-         "org.freedesktop.login1.power-off-multiple-sessions"].indexOf(action.id) >= 0) {
+    if (POWER_ACTIONS.indexOf(action.id) >= 0 && POWER_USERS.indexOf(subject.user) >= 0) {
         return polkit.Result.YES;
     }
     return polkit.Result.NOT_HANDLED;

@@ -153,11 +153,16 @@ async-методами. Метод `restart_unit` превращается в в
 
 ## polkit
 
-`deploy/polkit/50-remoteplayer.rules` разрешает системному пользователю `remoteplayer`:
+`deploy/polkit/50-remoteplayer.rules` разрешает:
 
-- `org.freedesktop.systemd1.manage-units` для `unit == remoteplayer-mpv.service`
-  и `verb` из `start`/`stop`/`restart`;
-- `org.freedesktop.login1.reboot` / `power-off` (и варианты `-multiple-sessions`).
+- членам группы `remoteplayer` — `org.freedesktop.systemd1.manage-units` для
+  `unit == remoteplayer-mpv.service` и `verb` из `start`/`stop`/`restart`.
+  Через сокет mpv они и так могут его завершить, так что нового права это не
+  даёт;
+- только пользователям из `POWER_USERS` (по умолчанию `remoteplayer`) —
+  `org.freedesktop.login1.reboot` / `power-off` (и варианты
+  `-multiple-sessions`). Сторонние IPC-клиенты в группе перезагрузить Pi не
+  могут.
 
 Больше ничего. В отличие от `sudo`, это работает при `NoNewPrivileges=yes`
 (D-Bus-вызов — не смена привилегий процесса) и не требует запускать внешние
