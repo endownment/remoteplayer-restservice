@@ -33,12 +33,30 @@ cargo run -- --config config/dev.toml
 2. `PATCH /settings {"script-opts": "osc-visibility=always"}` во время
    воспроизведения → mpv перезапускается, файл продолжается с той же позиции.
 3. Закрыть окно mpv (или `kill -9`) → через 3 секунды «супервизор» поднимет
-   mpv заново. Если рядом запущен mpvwatcher, сервис восстановит
+   mpv заново. Если рядом запущен mpvwatcher (его `state-socket` — это
+   `restore.watcher-socket` из dev.toml, `dev-data/watcher/state.sock`), сервис восстановит
    воспроизведение по его снимку.
 4. `PATCH /settings {"vo": "nonexistent", "force-window": true}` → окно mpv не
    открывается; сервис откатывает настройки и возвращает 502 с логом mpv.
 5. `PATCH /settings {"demuxer-max-bytes": "abc"}` → mpv отклоняет значение на лету,
    ответ 422, ничего не сохранено.
+
+## Режим «только для чтения» без Pi
+
+Права обычного пользователя проверяются через `chmod`, а настоящее
+read-only монтирование — от root:
+
+```sh
+mkdir -p ro/media/inbox ro/state
+sudo mount --bind ro ro && sudo mount -o remount,bind,ro ro
+# в копии dev.toml: upload-root = "ro/media", settings-file/args-env-file в ro/state
+```
+
+Что должно получиться: `GET /storage` → `"mode": "read-only"`, загрузка и
+создание папки → 403 «read-only», список и воспроизведение работают,
+`PATCH /settings` → 403 «nothing was changed», а mpv свои значения сохраняет.
+`upload-root` в `/dev/shm` (tmpfs) при `allow-volatile = false` даёт 403
+«RAM-backed filesystem». Без `upload-root` — 501.
 
 ## Юнит-тесты
 

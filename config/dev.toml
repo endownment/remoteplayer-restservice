@@ -11,6 +11,8 @@ token = "dev-token-0123456789abcdef"
 upload-root = "dev-data/media"
 default-folder = "inbox"
 min-free-bytes = 0
+# Development checkouts may sit on an overlay (containers); allow uploads there.
+allow-volatile = true
 
 [mpv]
 ipc-socket = "dev-data/run/mpv.sock"
@@ -36,8 +38,9 @@ power = "stub"
 
 [restore]
 after-crash = true
-# Point this at the state file of a locally running remoteplayer-mpvwatcher.
-watcher-state-file = "dev-data/watcher/state.json"
+on-start = true
+# The state-socket of a locally running remoteplayer-mpvwatcher.
+watcher-socket = "dev-data/watcher/state.sock"
 
 # The built-in defaults target the Pi's DRM output; a desktop needs a window.
 [player-defaults]

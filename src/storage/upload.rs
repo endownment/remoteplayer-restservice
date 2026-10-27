@@ -64,6 +64,7 @@ impl MediaLibrary {
         E: std::fmt::Display,
     {
         let expected_md5: Option<String> = request.expected_md5.as_deref().map(normalize_md5).transpose()?;
+        let root: PathBuf = self.writable_root()?;
         let folder_path: PathBuf = self.ensure_folder_path(&request.folder).await?;
         let target: PathBuf = folder_path.join(request.name.as_str());
         let display_name: String = format!("{}/{}", request.folder, request.name);
@@ -71,7 +72,7 @@ impl MediaLibrary {
             return Err(StorageError::AlreadyExists(display_name));
         }
         if let Some(length) = request.content_length {
-            self.check_space_for(length)?;
+            self.check_space_for(&root, length)?;
         }
 
         let partial: PartialFile = PartialFile { path: partial_path(&folder_path, &request.name), committed: false };
@@ -121,9 +122,16 @@ impl MediaLibrary {
     }
 }
 
+const PARTIAL_MARKER: &str = ".part-";
+
 fn partial_path(folder_path: &Path, name: &EntryName) -> PathBuf {
     let sequence: u64 = UPLOAD_COUNTER.fetch_add(1, Ordering::Relaxed);
-    folder_path.join(format!(".{}.part-{}-{}", name, std::process::id(), sequence))
+    folder_path.join(format!(".{}{}{}-{}", name, PARTIAL_MARKER, std::process::id(), sequence))
+}
+
+/// Recognises the names `partial_path` produces.
+pub fn is_partial_upload_name(name: &str) -> bool {
+    name.starts_with('.') && name.contains(PARTIAL_MARKER)
 }
 
 fn normalize_md5(raw: &str) -> Result<String, StorageError> {
@@ -141,10 +149,11 @@ mod tests {
 
     fn library_in(directory: &Path, max_upload_bytes: Option<u64>) -> MediaLibrary {
         MediaLibrary::open(&StorageConfig {
-            upload_root: directory.to_path_buf(),
+            upload_root: Some(directory.to_path_buf()),
             default_folder: "inbox".to_string(),
             min_free_bytes: 0,
             max_upload_bytes,
+            allow_volatile: true,
         })
         .expect("open library")
     }
@@ -207,6 +216,24 @@ mod tests {
             .await;
         assert!(matches!(result, Err(StorageError::ChecksumMismatch { .. })));
         assert!(leftover_names(directory.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn uploads_left_over_by_a_power_cut_are_removed_on_start() {
+        let directory: tempfile::TempDir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(directory.path().join("movies")).expect("folder");
+        std::fs::write(directory.path().join("movies/.a.mkv.part-123-0"), b"half").expect("seed");
+        std::fs::write(directory.path().join("movies/.hidden"), b"keep").expect("seed");
+        library_in(directory.path(), None);
+        assert_eq!(leftover_names(directory.path()), vec![".hidden".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn without_an_upload_root_uploads_are_refused() {
+        let library: MediaLibrary = MediaLibrary::open(&StorageConfig::default()).expect("open library");
+        let result: Result<UploadResult, StorageError> =
+            library.receive_upload(request("a.txt", false, None), body(&["x"])).await;
+        assert!(matches!(result, Err(StorageError::NotConfigured)));
     }
 
     #[tokio::test]

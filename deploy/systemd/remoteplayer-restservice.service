@@ -9,18 +9,19 @@ Type=notify
 User=coop
 # video: /dev/cec0 and vcgencmd; systemd-journal: GET /api/v1/player/log.
 SupplementaryGroups=video systemd-journal
-# /var/lib/remoteplayer: settings.json and the mpv.env read by remoteplayer-mpv.service.
-StateDirectory=remoteplayer
-StateDirectoryMode=0750
+# No StateDirectory=: on a read-only root systemd could not create it, and the
+# unit would fail to start. Settings and media live on /srv/remoteplayer.
 ExecStart=/usr/local/bin/remoteplayer-restservice --config /etc/remoteplayer/restservice.toml
 Restart=on-failure
 RestartSec=2
 
 # Sandboxing: the whole filesystem is read-only for this service except the
-# state directory and the media library. If storage.upload-root is moved,
-# update ReadWritePaths (and ProtectHome when it is below /home).
+# writable partition. "-" lets the unit start without it (a fully read-only
+# system); the service then refuses changes with a clear error. If you move
+# the paths in the configuration, update ReadWritePaths (and ProtectHome when
+# they are below /home).
 ProtectSystem=strict
-ReadWritePaths=/srv/remoteplayer/media
+ReadWritePaths=-/srv/remoteplayer
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes

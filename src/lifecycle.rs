@@ -1,7 +1,6 @@
 //! Operations that change mpv's process: applying settings, restarting with
 //! the playback state preserved, and restoring after mpv crashed.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -10,9 +9,11 @@ use serde::Serialize;
 use tokio::sync::{MutexGuard, watch};
 
 use crate::app_context::AppContext;
-use crate::mpv::{ConnectionState, MpvError, PlayerSnapshot, SavedPlayerState, SavedStateError, read_saved_state};
+use crate::config::RestoreConfig;
+use crate::mpv::{ConnectionState, MpvError, PlayerSnapshot, SavedPlayerState};
 use crate::service_manager::ServiceError;
 use crate::settings::{ApplyMode, PlayerSettings, SettingChange, SettingsError};
+use crate::watcher_client::{WatcherClient, WatcherError};
 
 const LOG_LINES_ON_FAILURE: usize = 20;
 /// How long mpv may take to open its window after the IPC socket appeared.
@@ -35,10 +36,12 @@ pub enum LifecycleError {
     RolledBack { cause: String, rollback: &'static str, log: Vec<String> },
     #[error("mpv refused `{key}`: {reason}; nothing was changed")]
     LiveChangeRejected { key: &'static str, reason: String },
-    #[error("no watcher state file is configured (restore.watcher-state-file)")]
-    NoWatcherStateFile,
+    #[error("no watcher is configured (restore.watcher-socket)")]
+    NoWatcher,
+    #[error("the watcher knows no previous state")]
+    NothingToRestore,
     #[error(transparent)]
-    SavedState(#[from] SavedStateError),
+    Watcher(#[from] WatcherError),
 }
 
 impl LifecycleError {
@@ -265,8 +268,8 @@ pub struct RestoreReport {
 }
 
 pub async fn restore_from_watcher(context: &AppContext) -> Result<RestoreReport, LifecycleError> {
-    let path: &Path = context.config.restore.watcher_state_file.as_deref().ok_or(LifecycleError::NoWatcherStateFile)?;
-    let saved: SavedPlayerState = read_saved_state(path)?;
+    let watcher: &WatcherClient = context.watcher.as_ref().ok_or(LifecycleError::NoWatcher)?;
+    let saved: SavedPlayerState = watcher.last().await?.ok_or(LifecycleError::NothingToRestore)?;
     let _guard: MutexGuard<'_, ()> = lock_player(context)?;
     let warnings: Vec<String> = saved.player.restore(&context.mpv).await;
     Ok(RestoreReport {
@@ -277,35 +280,40 @@ pub async fn restore_from_watcher(context: &AppContext) -> Result<RestoreReport,
     })
 }
 
-/// Restores the watcher's last snapshot when mpv comes back with a new pid
-/// that this service did not cause. The snapshot must belong to the process
-/// that died, and the new mpv must still be empty, so a restore never
-/// overwrites something a user (or another IPC client) already started.
-pub fn spawn_crash_recovery(context: Arc<AppContext>) {
-    if !context.config.restore.after_crash {
+/// How long to wait for the watcher's socket at boot, when it may start later.
+const WATCHER_PATIENCE: Duration = Duration::from_secs(10);
+
+/// Restores the watcher's snapshot whenever a new mpv appears that this
+/// service did not start itself: on this service's start (`restore.on-start`,
+/// e.g. after a reboot) and after mpv crashed (`restore.after-crash`).
+///
+/// One rule covers both cases: the new mpv must still be empty, and the
+/// snapshot must come from a *different* mpv process and contain a playlist.
+/// So a restore never overwrites what a user or another IPC client started,
+/// and a deliberate stop (same process, empty snapshot) is respected.
+pub fn spawn_automatic_restore(context: Arc<AppContext>) {
+    let restore: &RestoreConfig = &context.config.restore;
+    if !restore.after_crash && !restore.on_start {
         return;
     }
-    let Some(state_file): Option<PathBuf> = context.config.restore.watcher_state_file.clone() else {
-        tracing::info!("crash recovery is off: restore.watcher-state-file is not configured");
+    if context.watcher.is_none() {
+        tracing::info!("automatic restore is off: restore.watcher-socket is not configured");
         return;
-    };
-    tokio::spawn(watch_for_crashes(context, state_file));
+    }
+    tokio::spawn(watch_for_new_mpv(context));
 }
 
-async fn watch_for_crashes(context: Arc<AppContext>, state_file: PathBuf) {
+async fn watch_for_new_mpv(context: Arc<AppContext>) {
     let mut connection: watch::Receiver<ConnectionState> = context.mpv.watch_connection();
-    let mut last_pid: Option<u32> = None;
+    let mut first_connection: bool = true;
     loop {
         let state: ConnectionState = *connection.borrow_and_update();
         if let ConnectionState::Connected { .. } = state {
-            let pid: Option<u32> = context.mpv.get_property_optional("pid").await.ok().flatten();
-            let previous: Option<u32> = last_pid;
-            last_pid = pid.or(previous);
-            let replaced: bool = matches!((previous, pid), (Some(old), Some(new)) if old != new);
-            if replaced && !context.planned_restart.load(Ordering::SeqCst) {
-                if let Some(old_pid) = previous {
-                    recover_after_crash(&context, &state_file, old_pid).await;
-                }
+            let wanted: bool =
+                if first_connection { context.config.restore.on_start } else { context.config.restore.after_crash };
+            first_connection = false;
+            if wanted && !context.planned_restart.load(Ordering::SeqCst) {
+                restore_into_new_mpv(&context).await;
             }
         }
         if connection.changed().await.is_err() {
@@ -314,24 +322,30 @@ async fn watch_for_crashes(context: Arc<AppContext>, state_file: PathBuf) {
     }
 }
 
-async fn recover_after_crash(context: &AppContext, state_file: &Path, crashed_pid: u32) {
-    let saved: SavedPlayerState = match read_saved_state(state_file) {
-        Ok(saved) => saved,
+async fn restore_into_new_mpv(context: &AppContext) {
+    let Some(watcher): Option<&WatcherClient> = context.watcher.as_ref() else { return };
+    let Some(pid): Option<u32> = context.mpv.get_property_optional("pid").await.ok().flatten() else { return };
+    let playlist_count: u64 = context.mpv.get_property_optional("playlist-count").await.ok().flatten().unwrap_or(0);
+    if playlist_count > 0 {
+        tracing::debug!(pid, "mpv already has a playlist, nothing to restore");
+        return;
+    }
+    let saved: SavedPlayerState = match watcher.last_waiting(WATCHER_PATIENCE).await {
+        Ok(Some(saved)) => saved,
+        Ok(None) => {
+            tracing::info!(pid, "the watcher knows no previous state; nothing to restore");
+            return;
+        }
         Err(error) => {
-            tracing::warn!(%error, "mpv was restarted externally, but there is no usable watcher snapshot");
+            tracing::warn!(pid, %error, "cannot ask the watcher for the previous state");
             return;
         }
     };
-    if saved.mpv.pid != Some(crashed_pid) || saved.player.is_empty() {
-        tracing::info!(crashed_pid, snapshot_pid = ?saved.mpv.pid, "watcher snapshot does not describe the crashed mpv, not restoring");
-        return;
-    }
-    let playlist_count: u64 = context.mpv.get_property_optional("playlist-count").await.ok().flatten().unwrap_or(0);
-    if playlist_count > 0 {
-        tracing::info!("new mpv already has a playlist, not restoring");
+    if saved.player.is_empty() || saved.mpv.pid == Some(pid) {
+        tracing::debug!(pid, snapshot_pid = ?saved.mpv.pid, "the snapshot is empty or belongs to this mpv; not restoring");
         return;
     }
     let _guard: MutexGuard<'_, ()> = context.player_operation.lock().await;
     let warnings: Vec<String> = saved.player.restore(&context.mpv).await;
-    tracing::info!(crashed_pid, items = saved.player.playlist.len(), ?warnings, "restored playback after mpv crash");
+    tracing::info!(pid, previous_pid = ?saved.mpv.pid, items = saved.player.playlist.len(), ?warnings, "restored playback");
 }

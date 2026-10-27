@@ -3,17 +3,17 @@
 ## Компоненты на Pi
 
 ```
-                 HTTP :8080                       unix socket (JSON IPC)
- клиенты  ───────────────────▶ remoteplayer-restservice ─────────────┐
- (веб, приложения)                 │      ▲                          ▼
-                                   │      │ state.json        remoteplayer-mpv.service
-                         D-Bus     │      │                     (mpv на DRM, HDMI)
-                     (systemd,     │  remoteplayer-mpvwatcher ───────┘
-                      logind)      │      (опрос раз в 7 с)          ▲
-                                   ▼                                 │
-                            systemd  ── EnvironmentFile ── mpv.env ──┘
-                                                               (пишет restservice)
-                    сторонние IPC-клиенты (jellyfin-mpv-shim) ──────▶ тот же сокет mpv
+                HTTP :8080                          unix socket (JSON IPC)
+ клиенты ─────────────────▶ remoteplayer-restservice ──────────────────┐
+ (веб, приложения)              │         ▲                            ▼
+                                │         │ `last` (сокет)   remoteplayer-mpv.service
+                        D-Bus   │         │                    (mpv на DRM, HDMI)
+                   (systemd,    │   remoteplayer-mpvwatcher ◀──────────┤ события mpv
+                    logind)     │   (снимок в памяти; state.json)      │
+                                ▼                                      │
+                         systemd ── EnvironmentFile ── mpv.env ────────┘
+                                                       (пишет restservice)
+              сторонние IPC-клиенты (jellyfin-mpv-shim) ──────────▶ тот же сокет mpv
 ```
 
 - **mpv** — отдельный systemd-юнит. Сервис его не встраивает и не запускает
@@ -23,9 +23,15 @@
 - **restservice** держит одно постоянное соединение с mpv. Через него идут
   команды и приходят события. Если mpv перезапускается, сервис сам
   переподключается.
-- **mpvwatcher** — отдельный маленький процесс. Раз в 7 секунд он сохраняет
-  состояние плеера. Если mpv упадёт, systemd его поднимет, а restservice
-  восстановит воспроизведение из этого файла.
+- **mpvwatcher** — отдельный маленький процесс. Он следит за событиями mpv и
+  держит снимок для восстановления: в памяти, а если есть куда писать — ещё и
+  в файле. Когда появляется новый пустой mpv (systemd поднял его после
+  падения, или Pi загрузился), restservice спрашивает у наблюдателя `last` и
+  восстанавливает воспроизведение.
+- Всё, что пишется на диск, лежит на одном писабельном разделе
+  `/srv/remoteplayer`. Остальная карта может быть только для чтения; без
+  раздела сервисы работают в режиме «только чтение» и сообщают об этом
+  (README, раздел «Read-only SD card»).
 
 ## Модули `src/`
 
@@ -39,7 +45,8 @@
 | `auth.rs` | middleware с bearer-токеном | `app_context` |
 | `mpv/` | IPC-клиент, протокол, состояние, снимок/восстановление, фильтр сырого IPC | — |
 | `settings/` | модель настроек mpv, merge-patch, хранение, EnvironmentFile | `fs_util` |
-| `lifecycle.rs` | применение настроек, перезапуск с сохранением состояния, восстановление после падения | `mpv`, `settings`, `service_manager` |
+| `lifecycle.rs` | применение настроек, перезапуск с сохранением состояния, автоматическое восстановление | `mpv`, `settings`, `service_manager`, `watcher_client` |
+| `watcher_client.rs` | запрос `last` к сокету mpvwatcher | `mpv` (тип снимка) |
 | `service_manager/` | systemd через D-Bus или дочерний процесс (для разработки) | — |
 | `storage/` | папки и файлы, загрузка, MD5 | — |
 | `player_command.rs` | типизированные команды → команды mpv | `mpv`, `storage` |
@@ -53,7 +60,7 @@
 
 **Настройки mpv лежат не в mpv.conf и не в сгенерированном unit-файле, а в
 EnvironmentFile.** Unit-файл статичен, его ставит root. Сервис пишет только
-`/var/lib/remoteplayer/mpv.env`, а systemd подставляет оттуда
+`/srv/remoteplayer/state/restservice/mpv.env`, а systemd подставляет оттуда
 `$REMOTEPLAYER_MPV_ARGS` в `ExecStart`. Если бы сервис сам писал unit-файлы,
 ему понадобилось бы право на `daemon-reload` и `LinkUnitFiles`, а такое право
 не ограничить одним юнитом — по сути это root. Подробности в
@@ -68,6 +75,14 @@ EnvironmentFile.** Unit-файл статичен, его ставит root. С�
 перезапуском сервис снимает снимок состояния. После перезапуска ждёт, пока mpv
 снова откроет сокет, и восстанавливает снимок. Если mpv не поднялся с новыми
 настройками, возвращаются старые.
+
+**Писабельность проверяется делом, а не по правам.** Медиатека и настройки
+перед записью не смотрят на биты прав. Ошибка самой записи
+(`ReadOnlyFilesystem`, `PermissionDenied`) превращается в 403 с понятной
+причиной, а `GET /storage` и `GET /settings` создают и удаляют пробный файл.
+RAM-файловые системы (tmpfs, overlay) распознаются через `statfs`: загрузка
+туда заполнила бы память, поэтому она запрещена. Подробнее в
+[08](08-uploads-and-storage.md) и [07](07-settings-and-systemd.md).
 
 **Общение с systemd идёт по D-Bus, а не через `systemctl`.** Это типизированный
 API вместо разбора текстового вывода. Права выдаёт polkit-правило, и только на

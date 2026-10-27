@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::audio::AudioError;
 use crate::cec::CecError;
+use crate::fs_util::{describe_io_error, is_write_refusal};
 use crate::lifecycle::LifecycleError;
 use crate::mpv::{MpvError, RawCommandError};
 use crate::player_command::CommandError;
@@ -99,7 +100,12 @@ impl From<StorageError> for ApiError {
             | StorageError::Interrupted(_) => StatusCode::BAD_REQUEST,
             StorageError::FolderNotFound(_) | StorageError::FileNotFound(_) => StatusCode::NOT_FOUND,
             StorageError::AlreadyExists(_) | StorageError::FolderNotEmpty(_) => StatusCode::CONFLICT,
-            StorageError::OutsideRoot(_) => StatusCode::FORBIDDEN,
+            StorageError::OutsideRoot(_)
+            | StorageError::ReadOnly(_)
+            | StorageError::PermissionDenied(_)
+            | StorageError::Volatile(_) => StatusCode::FORBIDDEN,
+            StorageError::NotConfigured => StatusCode::NOT_IMPLEMENTED,
+            StorageError::RootUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             StorageError::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             StorageError::InsufficientSpace { .. } | StorageError::DiskFull => StatusCode::INSUFFICIENT_STORAGE,
             StorageError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -110,11 +116,25 @@ impl From<StorageError> for ApiError {
 
 impl From<SettingsError> for ApiError {
     fn from(error: SettingsError) -> ApiError {
-        let status: StatusCode = match error {
-            SettingsError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            SettingsError::Io { .. } | SettingsError::Encode(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        ApiError::new(status, error.to_string())
+        settings_status_and_detail(&error).into()
+    }
+}
+
+/// Shared by `SettingsError` and `LifecycleError::Settings`.
+fn settings_status_and_detail(error: &SettingsError) -> (StatusCode, String) {
+    match error {
+        SettingsError::Invalid(_) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
+        SettingsError::Io { path, source } if is_write_refusal(source) => (
+            StatusCode::FORBIDDEN,
+            format!("settings cannot be saved, {}: {}; nothing was changed", path.display(), describe_io_error(source)),
+        ),
+        SettingsError::Io { .. } | SettingsError::Encode(_) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+impl From<(StatusCode, String)> for ApiError {
+    fn from((status, detail): (StatusCode, String)) -> ApiError {
+        ApiError::new(status, detail)
     }
 }
 
@@ -129,16 +149,15 @@ impl From<LifecycleError> for ApiError {
         let log: Vec<String> = error.log().to_vec();
         let status: StatusCode = match &error {
             LifecycleError::Busy => StatusCode::CONFLICT,
-            LifecycleError::Settings(SettingsError::Invalid(_)) | LifecycleError::LiveChangeRejected { .. } => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
-            LifecycleError::NoWatcherStateFile => StatusCode::NOT_IMPLEMENTED,
-            LifecycleError::SavedState(_) => StatusCode::NOT_FOUND,
+            LifecycleError::LiveChangeRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            LifecycleError::NoWatcher => StatusCode::NOT_IMPLEMENTED,
+            LifecycleError::NothingToRestore => StatusCode::NOT_FOUND,
+            LifecycleError::Watcher(_) => StatusCode::BAD_GATEWAY,
             LifecycleError::MpvDidNotStart { .. }
             | LifecycleError::VideoOutputFailed { .. }
             | LifecycleError::RolledBack { .. }
             | LifecycleError::Service(_) => StatusCode::BAD_GATEWAY,
-            LifecycleError::Settings(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            LifecycleError::Settings(settings) => return ApiError::from(settings_status_and_detail(settings)),
         };
         ApiError::new(status, error.to_string()).with_log(&log)
     }
@@ -192,5 +211,31 @@ impl From<AudioError> for ApiError {
                 ApiError::new(StatusCode::BAD_GATEWAY, error.to_string())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn settings_on_a_read_only_filesystem_are_forbidden_not_internal_errors() {
+        let error: SettingsError = SettingsError::Io {
+            path: PathBuf::from("/srv/remoteplayer/state/restservice/mpv.env"),
+            source: std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem),
+        };
+        let api_error: ApiError = ApiError::from(LifecycleError::Settings(error));
+        assert_eq!(api_error.status, StatusCode::FORBIDDEN);
+        assert!(api_error.detail.contains("nothing was changed"));
+    }
+
+    #[test]
+    fn library_without_upload_root_is_not_implemented() {
+        assert_eq!(ApiError::from(StorageError::NotConfigured).status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(
+            ApiError::from(StorageError::RootUnavailable("/srv".to_string())).status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }

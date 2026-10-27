@@ -2,7 +2,7 @@ mod patch;
 mod store;
 
 pub use patch::SettingsPatch;
-pub use store::{SettingsError, SettingsStore};
+pub use store::{SettingsError, SettingsPersistence, SettingsStore};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

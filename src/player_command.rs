@@ -219,10 +219,11 @@ mod tests {
     async fn play_resolves_library_paths_and_rejects_missing_files() {
         let directory: tempfile::TempDir = tempfile::tempdir().expect("temp dir");
         let library: MediaLibrary = MediaLibrary::open(&StorageConfig {
-            upload_root: directory.path().to_path_buf(),
+            upload_root: Some(directory.path().to_path_buf()),
             default_folder: "inbox".to_string(),
             min_free_bytes: 0,
             max_upload_bytes: None,
+            allow_volatile: true,
         })
         .expect("library");
         std::fs::write(directory.path().join("inbox/a.mkv"), b"x").expect("seed");

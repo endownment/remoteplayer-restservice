@@ -78,12 +78,12 @@
 Поэтому unit статичен, а меняется только файл окружения:
 
 ```ini
-EnvironmentFile=-/var/lib/remoteplayer/mpv.env
+EnvironmentFile=-/srv/remoteplayer/state/restservice/mpv.env
 ExecStart=/usr/bin/mpv --no-terminal --idle=yes --input-ipc-server=... $REMOTEPLAYER_MPV_ARGS
 ```
 
 ```sh
-# /var/lib/remoteplayer/mpv.env (пишет сервис)
+# /srv/remoteplayer/state/restservice/mpv.env (пишет сервис)
 REMOTEPLAYER_MPV_ARGS='--audio-device=alsa/hdmi:CARD=vc4hdmi,DEV=0 --vo=gpu --gpu-context=drm ...'
 ```
 
@@ -98,6 +98,31 @@ mpv запускается только с опциями командной с�
 конфигурационного файла. Каждый IPC-клиент видит один и тот же явно
 сконфигурированный mpv, а опции командной строки имеют приоритет над любым
 `mpv.conf`, если он у пользователя есть.
+
+## Настройки на read-only системе
+
+`settings.json` и `mpv.env` лежат на писабельном разделе
+(`/srv/remoteplayer/state/restservice`). Если раздела нет или он только для
+чтения:
+
+- сервис всё равно стартует: настройки читаются (файла нет — значения по
+  умолчанию), а неудачное обновление `mpv.env` при старте — только
+  предупреждение в логе;
+- `PATCH`/`PUT` отвечают 403 «settings cannot be saved … nothing was changed».
+  Отказ случается на первом же шаге — записи `mpv.env`, ещё до
+  `set_property` и перезапуска, — поэтому ни файлы, ни работающий mpv не
+  меняются;
+- `GET /settings` возвращает `persistence`: можно ли писать, причина, не в
+  RAM ли (`volatile`).
+
+Сохранённые настройки, в отличие от снимка наблюдателя, читаются и с
+неписабельного места: это конфигурация, которую видит и mpv (через
+`EnvironmentFile`), а сервис должен показывать то, с чем mpv реально работает.
+
+В юнитах нет `StateDirectory=`: на read-only корне systemd не смог бы его
+создать, и сервис не запустился бы. Вместо этого —
+`ReadWritePaths=-/srv/remoteplayer`; минус означает «если каталога нет — не
+страшно».
 
 ## D-Bus через zbus
 

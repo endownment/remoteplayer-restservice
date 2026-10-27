@@ -1,5 +1,9 @@
 # remoteplayer-restservice configuration for the Raspberry Pi.
 # Installed as /etc/remoteplayer/restservice.toml (see README.md, "Installation").
+#
+# Everything this service writes lives below /srv/remoteplayer, the writable
+# partition (README.md, "Read-only SD card"). Without it the service still runs:
+# library changes and uploads are refused, settings cannot be changed.
 
 listen = "0.0.0.0:8080"
 
@@ -10,6 +14,7 @@ token = "CHANGE-ME"
 
 [storage]
 # Files live in first-level folders below this directory, never in the root itself.
+# Comment out to run without a media library (the library endpoints answer 501).
 upload-root = "/srv/remoteplayer/media"
 # Folder used by POST /api/v1/uploads when no ?folder= is given.
 default-folder = "inbox"
@@ -17,12 +22,14 @@ default-folder = "inbox"
 min-free-bytes = 268435456
 # Optional hard limit per upload, in bytes.
 # max-upload-bytes = 21474836480
+# Uploads to tmpfs or an overlay would fill the RAM, so they are refused.
+allow-volatile = false
 
 [mpv]
 ipc-socket = "/run/remoteplayer-mpv/mpv.sock"
-settings-file = "/var/lib/remoteplayer/settings.json"
-# Read by remoteplayer-mpv.service through EnvironmentFile=.
-args-env-file = "/var/lib/remoteplayer/mpv.env"
+settings-file = "/srv/remoteplayer/state/restservice/settings.json"
+# Read by remoteplayer-mpv.service through EnvironmentFile= (same path there).
+args-env-file = "/srv/remoteplayer/state/restservice/mpv.env"
 executable = "/usr/bin/mpv"
 restart-timeout-seconds = 20
 request-timeout-seconds = 5
@@ -50,11 +57,14 @@ preferred-connector = "HDMI-A-1"
 power = "logind"
 
 [restore]
-# Restore playback from the watcher's snapshot when mpv crashes and systemd restarts it.
-# Needs `state-file` enabled in the watcher's configuration: its socket only
-# reports the live state, which after a crash is the new, empty mpv.
+# Playback is restored from remoteplayer-mpvwatcher's `last` snapshot whenever an
+# mpv appears that is still empty while the snapshot comes from another mpv:
+# after mpv crashed and systemd restarted it ...
 after-crash = true
-watcher-state-file = "/var/lib/remoteplayer-mpvwatcher/state.json"
+# ... and when this service starts, e.g. after a reboot. That only finds a
+# snapshot if the watcher could keep it in its state file.
+on-start = true
+watcher-socket = "/run/remoteplayer-mpvwatcher/state.sock"
 
 # Overrides of the built-in mpv defaults (the tested Raspberry Pi 3 command line).
 # Keys are mpv option names; an empty string means "do not pass this option".

@@ -8,7 +8,7 @@ use crate::error::ApiError;
 use crate::lifecycle::{ApplyReport, apply_settings};
 use crate::routes::SharedContext;
 use crate::routes::extract::JsonBody;
-use crate::settings::{ApplyMode, PlayerSettings, SettingsPatch};
+use crate::settings::{ApplyMode, PlayerSettings, SettingsPatch, SettingsPersistence};
 
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -16,6 +16,7 @@ pub struct SettingsResponse {
     settings: PlayerSettings,
     defaults: PlayerSettings,
     apply_modes: BTreeMap<&'static str, ApplyMode>,
+    persistence: SettingsPersistence,
 }
 
 pub async fn get_settings(State(context): State<SharedContext>) -> Json<SettingsResponse> {
@@ -23,6 +24,7 @@ pub async fn get_settings(State(context): State<SharedContext>) -> Json<Settings
         settings: context.settings.current(),
         defaults: context.settings.defaults().clone(),
         apply_modes: PlayerSettings::apply_modes().into_iter().collect(),
+        persistence: context.settings.persistence(),
     })
 }
 

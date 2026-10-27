@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{PoisonError, RwLock};
 
-use crate::fs_util::{read_optional_to_string, write_atomically};
+use serde::Serialize;
+
+use crate::fs_util::{describe_io_error, is_volatile, probe_writable, read_optional_to_string, write_atomically};
 use crate::settings::{PlayerSettings, SettingsPatch, ValidationError};
 
 pub const ARGS_VARIABLE_NAME: &str = "REMOTEPLAYER_MPV_ARGS";
@@ -14,6 +16,17 @@ pub enum SettingsError {
     Io { path: PathBuf, source: std::io::Error },
     #[error("cannot encode settings: {0}")]
     Encode(#[from] serde_json::Error),
+}
+
+/// Whether changed settings survive a reboot, probed when asked.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SettingsPersistence {
+    /// Both files can be written; otherwise every change is refused.
+    pub writable: bool,
+    /// Written, but to RAM (tmpfs/overlay): lost on power-off.
+    pub volatile: bool,
+    pub reason: Option<String>,
 }
 
 /// Owns the persisted player settings and the systemd EnvironmentFile derived from them.
@@ -68,6 +81,19 @@ impl SettingsStore {
             .map_err(|source: std::io::Error| SettingsError::Io { path: self.settings_file.clone(), source })?;
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = settings.clone();
         Ok(())
+    }
+
+    pub fn persistence(&self) -> SettingsPersistence {
+        let mut volatile: bool = false;
+        for file in [&self.settings_file, &self.args_env_file] {
+            let directory: &Path = file.parent().unwrap_or(Path::new("."));
+            if let Err(error) = probe_writable(directory) {
+                let reason: String = format!("{}: {}", directory.display(), describe_io_error(&error));
+                return SettingsPersistence { writable: false, volatile: false, reason: Some(reason) };
+            }
+            volatile |= is_volatile(directory);
+        }
+        SettingsPersistence { writable: true, volatile, reason: None }
     }
 
     pub fn args_env_file(&self) -> &Path {

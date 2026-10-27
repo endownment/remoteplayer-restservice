@@ -15,6 +15,7 @@ mod service_manager;
 mod settings;
 mod storage;
 mod system_info;
+mod watcher_client;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -58,7 +59,7 @@ async fn run(command_line: CommandLine) -> Result<(), Box<dyn std::error::Error>
         tracing::warn!("authentication is disabled; anyone who can reach the port controls the player");
     }
     let context: Arc<AppContext> = AppContext::initialize(config).await?;
-    lifecycle::spawn_crash_recovery(Arc::clone(&context));
+    lifecycle::spawn_automatic_restore(Arc::clone(&context));
 
     let listener: TcpListener = TcpListener::bind(context.config.listen).await?;
     tracing::info!(address = %context.config.listen, "remoteplayer-restservice is listening");

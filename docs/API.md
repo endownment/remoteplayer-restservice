@@ -20,13 +20,13 @@ Failures around restarting mpv add a `log` array with mpv's last log lines.
 |---|---|
 | 400 | malformed request, invalid name, checksum mismatch |
 | 401 | missing or wrong token |
-| 403 | path outside the upload root, raw IPC command blocked or disabled |
-| 404 | folder, file or watcher snapshot not found |
+| 403 | no write access (read-only mount, no permission, RAM-backed upload root), path outside the upload root, raw IPC command blocked or disabled |
+| 404 | folder or file not found; the watcher knows no state to restore |
 | 409 | already exists, folder not empty, another restart in progress |
 | 413 | upload larger than `storage.max-upload-bytes` |
 | 422 | invalid setting or command value, mpv refused a typed command |
-| 501 | the feature is disabled in the configuration (CEC, power, restore) |
-| 502 / 503 / 504 | mpv, systemd or CEC failed / unreachable / timed out |
+| 501 | the feature is not configured (media library, CEC, power, watcher) |
+| 502 / 503 / 504 | mpv, systemd, CEC or the watcher failed / unreachable (also: upload root not mounted) / timed out |
 | 507 | not enough free space |
 
 Examples below use:
@@ -79,9 +79,16 @@ whitespace, quotes, `\`, `$` or backticks.
 {
   "settings": { "audio-device": "alsa/hdmi:CARD=vc4hdmi,DEV=0", "vo": "gpu", "...": "..." },
   "defaults": { "...": "..." },
-  "apply-modes": { "audio-device": "runtime", "vo": "restart", "...": "..." }
+  "apply-modes": { "audio-device": "runtime", "vo": "restart", "...": "..." },
+  "persistence": { "writable": true, "volatile": false, "reason": null }
 }
 ```
+
+`persistence` is probed on every request. With `"writable": false` (settings
+directory read-only, missing or not permitted; `reason` says which) every
+`PATCH`/`PUT` that would change something is answered with 403 and nothing
+changes — neither the files nor the running mpv. `"volatile": true` means the
+settings are saved to RAM (tmpfs/overlay) and are lost at power-off.
 
 ### `PATCH /settings` — change some settings
 
@@ -224,16 +231,22 @@ under settings. 409 while another restart or settings change runs.
 
 ### `POST /player/restore`
 
-Restores the snapshot that remoteplayer-mpvwatcher saved
-(`restore.watcher-state-file`), regardless of which mpv process wrote it.
+Restores the snapshot that remoteplayer-mpvwatcher keeps (its `last` answer,
+over `restore.watcher-socket`), regardless of which mpv process it came from.
+404 when the watcher knows no state, 501 without a configured watcher, 502
+when it cannot be reached.
 
 ```json
 { "captured-at-unix-ms": 1792976499186, "source-pid": 812, "restored-items": 3, "warnings": [] }
 ```
 
-Automatic restore after a crash happens without this call when
-`restore.after-crash = true`; it only acts if the snapshot belongs to the mpv
-process that died and the new mpv has not started playing anything yet.
+Without this call, playback is restored automatically whenever a new mpv
+appears that this service did not start itself — after a crash
+(`restore.after-crash`) and when this service starts, e.g. after a reboot
+(`restore.on-start`). It acts only if the new mpv is still empty and the
+snapshot contains a playlist from a *different* mpv process, so it never
+overwrites what someone started and never undoes a deliberate stop. After a
+reboot there is a snapshot only if the watcher has a writable state file.
 
 ### `GET /player/service`
 
@@ -253,15 +266,24 @@ mpv's last log lines (from the journal; at most 1000).
 ## Library
 
 Files live in first-level folders below `storage.upload-root`; the root itself
-holds no files and folders are not nested. Names may not contain `/`, `\` or
+holds no files and folders are not nested. Without `upload-root` every library
+endpoint answers 501; when the root is configured but not mounted, 503. When it
+cannot be written (read-only mount, no permission, or on a RAM-backed
+filesystem without `storage.allow-volatile`), listing, MD5 and playback work
+and every change is answered with 403. Names may not contain `/`, `\` or
 control characters and may not start with `.`. Files whose names start with a
 dot (including uploads in progress) are not listed.
 
 ### `GET /storage`
 
 ```json
-{ "root": "/srv/remoteplayer/media", "total-bytes": 62000000000, "available-bytes": 41000000000, "reserved-bytes": 268435456 }
+{ "mode": "read-write", "root": "/srv/remoteplayer/media", "reason": null, "volatile": false,
+  "total-bytes": 62000000000, "available-bytes": 41000000000, "reserved-bytes": 268435456 }
 ```
+
+`mode`: `read-write`, `read-only` (with `reason`), `unavailable` (configured but
+not mounted) or `not-configured`. Probed on every request by creating and
+deleting a file, so it shows what really works right now.
 
 ### `GET /folders`
 

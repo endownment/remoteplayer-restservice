@@ -10,6 +10,7 @@ use crate::power::PowerControl;
 use crate::service_manager::ServiceManager;
 use crate::settings::{PlayerSettings, SettingsStore};
 use crate::storage::MediaLibrary;
+use crate::watcher_client::WatcherClient;
 
 /// Everything request handlers need, created once at startup and shared by
 /// reference (`Arc<AppContext>`) between all requests — the Rust counterpart of
@@ -23,6 +24,7 @@ pub struct AppContext {
     pub service_manager: ServiceManager,
     pub cec: CecBackend,
     pub power: PowerControl,
+    pub watcher: Option<WatcherClient>,
     /// Serializes operations that restart mpv or change settings.
     pub player_operation: tokio::sync::Mutex<()>,
     /// Set while this service restarts mpv itself, so crash recovery stays out of the way.
@@ -37,11 +39,14 @@ impl AppContext {
             PlayerSettings::builtin_defaults().with_patch(&config.player_defaults, &PlayerSettings::builtin_defaults());
         let settings: SettingsStore =
             SettingsStore::load(config.mpv.settings_file.clone(), config.mpv.args_env_file.clone(), defaults)?;
-        if settings.ensure_env_file_matches_current()? {
-            tracing::info!(
+        match settings.ensure_env_file_matches_current() {
+            Ok(true) => tracing::info!(
                 file = %settings.args_env_file().display(),
                 "mpv arguments file rewritten; it takes effect on the next mpv restart"
-            );
+            ),
+            Ok(false) => {}
+            // A read-only system still runs, with the settings mpv already has.
+            Err(error) => tracing::warn!(%error, "cannot update the mpv arguments file; settings cannot be changed"),
         }
 
         let observed: Vec<String> = OBSERVED_PROPERTIES.iter().map(|name: &&str| name.to_string()).collect();
@@ -60,6 +65,7 @@ impl AppContext {
         let cec: CecBackend = CecBackend::from_config(&config.cec);
         let power: PowerControl = PowerControl::from_config(config.system.power, system_bus);
         let audio: AudioInventory = AudioInventory::new(config.mpv.executable.clone());
+        let watcher: Option<WatcherClient> = config.restore.watcher_socket.clone().map(WatcherClient::new);
 
         Ok(Arc::new(AppContext {
             config,
@@ -70,6 +76,7 @@ impl AppContext {
             service_manager,
             cec,
             power,
+            watcher,
             player_operation: tokio::sync::Mutex::new(()),
             planned_restart: AtomicBool::new(false),
         }))

@@ -1,9 +1,7 @@
 //! Everything needed to bring mpv back to where it was after a restart.
 //!
-//! The same JSON layout is written by remoteplayer-mpvwatcher (`player` field
-//! of its state file), so this service can restore from that file after a crash.
-
-use std::path::Path;
+//! The same JSON layout is kept by remoteplayer-mpvwatcher (the `player` field
+//! of its `last` answer), so this service can restore from it after a crash.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -77,7 +75,7 @@ impl TrackSelection {
     }
 }
 
-/// The state file of remoteplayer-mpvwatcher.
+/// The snapshot remoteplayer-mpvwatcher answers `last` with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct SavedPlayerState {
@@ -93,28 +91,6 @@ pub struct SavedPlayerState {
 pub struct MpvProcessInfo {
     pub pid: Option<u32>,
     pub version: Option<String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum SavedStateError {
-    #[error("cannot read {path}: {source}")]
-    Io { path: String, source: std::io::Error },
-    #[error("cannot parse {path}: {source}")]
-    Parse { path: String, source: serde_json::Error },
-    #[error("{path} has format version {found}, this service understands {SUPPORTED_STATE_FORMAT_VERSION}")]
-    UnsupportedVersion { path: String, found: u32 },
-}
-
-pub fn read_saved_state(path: &Path) -> Result<SavedPlayerState, SavedStateError> {
-    let display: String = path.display().to_string();
-    let text: String = std::fs::read_to_string(path)
-        .map_err(|source: std::io::Error| SavedStateError::Io { path: display.clone(), source })?;
-    let state: SavedPlayerState = serde_json::from_str(&text)
-        .map_err(|source: serde_json::Error| SavedStateError::Parse { path: display.clone(), source })?;
-    if state.format_version != SUPPORTED_STATE_FORMAT_VERSION {
-        return Err(SavedStateError::UnsupportedVersion { path: display, found: state.format_version });
-    }
-    Ok(state)
 }
 
 #[derive(Debug, Deserialize)]

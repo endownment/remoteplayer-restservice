@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::error::ApiError;
 use crate::routes::SharedContext;
 use crate::routes::extract::{JsonBody, QueryParams};
-use crate::storage::{EntryName, FileInfo, FolderInfo, Md5Info, StorageUsage, UploadRequest, UploadResult};
+use crate::storage::{EntryName, FileInfo, FolderInfo, Md5Info, StorageReport, UploadRequest, UploadResult};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -43,8 +43,8 @@ pub struct MoveFileRequest {
     overwrite: bool,
 }
 
-pub async fn storage(State(context): State<SharedContext>) -> Result<Json<StorageUsage>, ApiError> {
-    Ok(Json(context.library.usage()?))
+pub async fn storage(State(context): State<SharedContext>) -> Json<StorageReport> {
+    Json(context.library.report())
 }
 
 pub async fn list_folders(State(context): State<SharedContext>) -> Result<Json<Vec<FolderInfo>>, ApiError> {

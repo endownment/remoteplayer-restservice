@@ -22,6 +22,7 @@ pub enum ConfigError {
 pub struct AppConfig {
     pub listen: SocketAddr,
     pub auth: AuthConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
     pub mpv: MpvConfig,
     pub service_manager: ServiceManagerConfig,
@@ -48,11 +49,28 @@ pub struct AuthConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct StorageConfig {
-    pub upload_root: PathBuf,
+    /// Absent: no media library — the library endpoints answer 501.
+    pub upload_root: Option<PathBuf>,
+    #[serde(default = "default_folder_name")]
     pub default_folder: String,
     #[serde(default = "default_min_free_bytes")]
     pub min_free_bytes: u64,
     pub max_upload_bytes: Option<u64>,
+    /// Uploads to tmpfs or an overlay land in RAM; refused unless allowed here.
+    #[serde(default)]
+    pub allow_volatile: bool,
+}
+
+impl Default for StorageConfig {
+    fn default() -> StorageConfig {
+        StorageConfig {
+            upload_root: None,
+            default_folder: default_folder_name(),
+            min_free_bytes: default_min_free_bytes(),
+            max_upload_bytes: None,
+            allow_volatile: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -162,14 +180,19 @@ pub enum PowerConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct RestoreConfig {
+    /// Restore when mpv comes back empty after it crashed (systemd restarted it).
     #[serde(default = "default_true")]
     pub after_crash: bool,
-    pub watcher_state_file: Option<PathBuf>,
+    /// Restore when this service starts and finds mpv empty, e.g. after a reboot.
+    #[serde(default = "default_true")]
+    pub on_start: bool,
+    /// The `state-socket` of remoteplayer-mpvwatcher. Absent: no automatic restore.
+    pub watcher_socket: Option<PathBuf>,
 }
 
 impl Default for RestoreConfig {
     fn default() -> RestoreConfig {
-        RestoreConfig { after_crash: true, watcher_state_file: None }
+        RestoreConfig { after_crash: true, on_start: true, watcher_socket: None }
     }
 }
 
@@ -204,6 +227,10 @@ impl AppConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_folder_name() -> String {
+    "inbox".to_string()
 }
 
 fn default_min_free_bytes() -> u64 {

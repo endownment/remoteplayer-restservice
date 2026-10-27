@@ -11,7 +11,7 @@ It is one of the remoteplayer components:
 |---|---|
 | `remoteplayer-mpv.service` | mpv itself, fullscreen on DRM, with a JSON IPC socket (unit in [`deploy/systemd`](deploy/systemd)) |
 | **remoteplayer-restservice** | this repository: the HTTP API |
-| [remoteplayer-mpvwatcher](https://github.com/endownment/remoteplayer-mpvwatcher) | records the playback state to a file every 7 s, so it can be restored after a crash; answers live `get` requests on its socket |
+| [remoteplayer-mpvwatcher](https://github.com/endownment/remoteplayer-mpvwatcher) | follows mpv's state and keeps the snapshot to restore from (`last` on its socket), also across reboots when it can write |
 | remoteplayer-webcontrol | the web UI (planned) |
 
 Other mpv IPC clients (for example jellyfin-mpv-shim) can share the same mpv
@@ -26,8 +26,11 @@ socket; the service does not assume it is the only one talking to mpv.
   `PUT`/`PATCH` (JSON Merge Patch). Options mpv accepts at runtime are applied
   live; the others restart mpv and **restore playlist, position, pause, volume
   and tracks**. A failed restart rolls back to the previous settings.
-- **Crash recovery** — when mpv dies and systemd restarts it, playback is
-  restored from the watcher's last snapshot.
+- **Automatic restore** — when mpv dies and systemd restarts it, and when
+  the Pi boots, playback is restored from the watcher's snapshot.
+- **Read-only systems** — everything the service writes lives on one
+  writable partition; without it the service runs read-only and says so
+  (see "Read-only SD card").
 - **Library** — first-level folders below one upload root; streaming uploads
   (raw `PUT` or multipart) with MD5, free-space checks and atomic commit;
   listing, moving, deleting; MD5 of any file, cached in an extended attribute.
@@ -82,8 +85,9 @@ sudo install -m 0755 target/release/remoteplayer-restservice /usr/local/bin/
 sudo install -d /etc/remoteplayer
 sudo install -m 0640 -g coop config/restservice.toml /etc/remoteplayer/restservice.toml
 
-# Media library (must exist: the unit's sandbox mounts it writable)
-sudo install -d -o coop -g coop /srv/remoteplayer/media
+# The writable part (see "Read-only SD card"): media library and settings.
+# On a fully read-only system skip this; the service then runs read-only.
+sudo install -d -o coop -g coop /srv/remoteplayer/media /srv/remoteplayer/state/restservice
 
 # Groups: /dev/cec0 and vcgencmd (video), the mpv log (systemd-journal)
 sudo usermod -aG video,render,audio,systemd-journal coop
@@ -98,24 +102,75 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now remoteplayer-mpv.service remoteplayer-restservice.service
 ```
 
+Install remoteplayer-mpvwatcher as well; without it there is no automatic
+restore.
+
 If you used the earlier hand-written `remoteplayer-mpd.service`, disable it
 first: `sudo systemctl disable --now remoteplayer-mpd.service`. The new unit
 keeps the same mpv command line, but the IPC socket moves to
 `/run/remoteplayer-mpv/mpv.sock` and the tunable options come from
-`/var/lib/remoteplayer/mpv.env`, which this service writes.
+`/srv/remoteplayer/state/restservice/mpv.env`, which this service writes.
 
 Check it:
 
 ```sh
 systemctl status remoteplayer-restservice
 curl -s http://raspberrypi.local:8080/api/v1/health
+curl -s -H "Authorization: Bearer $TOKEN" http://raspberrypi.local:8080/api/v1/storage   # "mode": "read-write"?
 journalctl -u remoteplayer-restservice -f
 ```
+
+### Read-only SD card
+
+To be able to unplug the Pi at any time, the SD card is mounted read-only
+and everything that has to be written goes to one place, `/srv/remoteplayer`:
+
+```
+/srv/remoteplayer/
+├── media/                      the library (storage.upload-root)
+└── state/
+    ├── restservice/            settings.json, mpv.env (read by remoteplayer-mpv.service)
+    └── mpvwatcher/             state.json (the watcher's snapshot)
+```
+
+A typical setup:
+
+1. A separate ext4 partition or a USB drive, mounted in `/etc/fstab`, e.g.
+   `UUID=... /srv/remoteplayer ext4 defaults,noatime,nofail,x-systemd.device-timeout=10s 0 2`.
+   `nofail` lets the Pi boot without it.
+2. The root filesystem read-only, e.g. `raspi-config` → Performance Options →
+   Overlay File System. Writes to the root then go to RAM and vanish at
+   power-off. Check with `findmnt /srv/remoteplayer` that the partition is
+   mounted from its device, not as part of the overlay.
+
+Both services check where they can really write — they create and delete a
+probe file, they do not trust permission bits — and adapt:
+
+| | Writable partition | No write access, or not configured |
+|---|---|---|
+| uploads, folders, move/delete | work | 403 "read-only" / 501 "not configured"; listing and playback still work |
+| settings | saved, applied | `PATCH`/`PUT` answer 403, nothing changes; mpv keeps running with what it has |
+| restore after an mpv crash | yes | yes (from the watcher's memory) |
+| restore after reboot or unplugging | yes | no: the watcher answers "state unknown", nothing is restored |
+
+Two traps are detected explicitly:
+
+- **RAM-backed filesystems.** On tmpfs or an overlay a write succeeds but
+  lands in RAM. Uploads there would fill the Pi's 1 GB, so they are refused
+  (`storage.allow-volatile` overrides this); `GET /storage`, `GET /settings`
+  and the watcher's `status` report `"volatile": true`.
+- **Stale files.** A state file found in a place the watcher cannot write is
+  ignored: it may be arbitrarily old.
+
+The units have no `StateDirectory=`, which systemd cannot create on a read-only
+root, and list `/srv/remoteplayer` as an optional `ReadWritePaths=-…`, so they
+start with or without the partition. An upload interrupted by a power cut
+leaves a hidden partial file; it is removed at the next start.
 
 ### Why mpv's options live in an EnvironmentFile
 
 The unit file is static and installed once by root. The service only writes
-`/var/lib/remoteplayer/mpv.env`, which the unit reads through
+`/srv/remoteplayer/state/restservice/mpv.env`, which the unit reads through
 `EnvironmentFile=` and expands as `$REMOTEPLAYER_MPV_ARGS`. So:
 
 - the service never needs write access to `/etc/systemd` or `daemon-reload`;
@@ -137,12 +192,12 @@ main sections:
 | Section | Purpose |
 |---|---|
 | `listen`, `[auth]` | address and bearer token (≥ 16 characters) |
-| `[storage]` | upload root, default folder, free-space reserve, size limit |
+| `[storage]` | upload root (optional), default folder, free-space reserve, size limit, `allow-volatile` |
 | `[mpv]` | IPC socket, settings and EnvironmentFile paths, timeouts, raw IPC switch |
 | `[service-manager]` | `systemd` (the Pi) or `child-process` (development) |
 | `[cec]` | `linux` with a device, `stub`, or `disabled` |
 | `[display]`, `[system]` | sysfs paths, preferred connector, power control |
-| `[restore]` | crash recovery and the watcher's state file |
+| `[restore]` | automatic restore after a crash / on start, the watcher's socket |
 | `[player-defaults]` | overrides of the built-in mpv defaults |
 
 ## Security notes
