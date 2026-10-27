@@ -81,20 +81,20 @@ package creates; other programs get access to mpv by joining the group.
 ### From the APT repository (recommended)
 
 The packages of every release are published in a signed APT repository,
-[endownment/remoteplayer-apt](https://github.com/endownment/remoteplayer-apt),
+[endownment/endownment-remoteplayer-apt](https://github.com/endownment/endownment-remoteplayer-apt),
 so updates come with `apt upgrade`:
 
 ```sh
 sudo curl -fsSLo /usr/share/keyrings/remoteplayer-archive-keyring.gpg \
-    https://endownment.github.io/remoteplayer-apt/remoteplayer-archive-keyring.gpg
+    https://endownment.github.io/endownment-remoteplayer-apt/remoteplayer-archive-keyring.gpg
 sudo curl -fsSLo /etc/apt/sources.list.d/remoteplayer.sources \
-    https://endownment.github.io/remoteplayer-apt/remoteplayer.sources
+    https://endownment.github.io/endownment-remoteplayer-apt/remoteplayer.sources
 sudo apt update
 sudo apt install remoteplayer-restservice remoteplayer-mpvwatcher
 ```
 
 Automatic updates with `unattended-upgrades` and installing older versions:
-see the remoteplayer-apt README.
+see the endownment-remoteplayer-apt README.
 
 Without the repository, install a downloaded package: every tagged release
 on GitHub carries `.deb` files for `arm64`, `armhf` and `amd64` (BUILD.md,
@@ -342,6 +342,19 @@ main sections:
   reach the API.
 - The polkit rule grants the service user start/stop/restart of
   `remoteplayer-mpv.service` and reboot/power-off, nothing more.
+
+## License
+
+[GNU Affero General Public License v3.0 or later](LICENSE)
+(`AGPL-3.0-or-later`). You may use, study, change and share it. Whoever
+distributes it — changed or not, on its own or as part of another program —
+must pass on the complete source code of that program under the same
+license. Whoever runs a changed version as a network service must offer its
+source code to the users of that service as well.
+
+Programs that only talk to it through its HTTP API are separate works and are
+not covered: the license reaches code that is built together with this one,
+not its clients.
 
 ## Repository layout
 

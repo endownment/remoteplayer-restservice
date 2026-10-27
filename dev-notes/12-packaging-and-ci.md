@@ -126,7 +126,7 @@ Java или `dynamic_cast` в C++), а юнит содержит `RestartPrevent
 ## APT-репозиторий
 
 Отдельный репозиторий
-[remoteplayer-apt](https://github.com/endownment/remoteplayer-apt) собирает
+[endownment-remoteplayer-apt](https://github.com/endownment/endownment-remoteplayer-apt) собирает
 подписанный APT-репозиторий из выпусков обоих проектов и публикует его на
 GitHub Pages. Job `release` после публикации шлёт ему `repository_dispatch`
 (секрет `APT_REPOSITORY_TOKEN`); без токена новый выпуск появится при
